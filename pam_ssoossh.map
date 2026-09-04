@@ -1,0 +1,18 @@
+/* ELF version script (GNU ld, LLVM lld, FreeBSD ld).
+ *
+ * A PAM module is dlopen'd into a process with its own symbol table, so
+ * everything this module carries -- including vendored jsmn and qrcodegen
+ * later -- must stay invisible to the host. -fvisibility=hidden handles the
+ * module's own translation units; this handles anything static-linked in
+ * that was compiled without it.
+ *
+ * The macOS equivalent is pam_ssoossh.syms, because ld64 has no version
+ * scripts. Keep the two lists in step.
+ */
+{
+    global:
+        pam_sm_authenticate;
+        pam_sm_setcred;
+    local:
+        *;
+};
