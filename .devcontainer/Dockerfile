@@ -104,7 +104,35 @@ RUN printf '%s\n' \
     > /etc/rsyslog.d/00-devcontainer.conf \
     && sed -i 's/^module(load="imklog")/#module(load="imklog")/' /etc/rsyslog.conf || true
 
+# Claude Code, installed the same way it is on the host: the native installer,
+# not npm. It goes in as vscode rather than root so it lands in the user's own
+# ~/.local and can self-update without sudo.
+#
+# Installed here rather than mounted from the host on purpose. The host binary
+# is built for that host's glibc -- Debian 13 there, Debian 12 here -- and a
+# mounted binary would be one glibc bump away from not running at all.
+USER vscode
+RUN curl -fsSL https://claude.ai/install.sh | bash
+USER root
+
+# The installer warns about this: ~/.local/bin is not on PATH in this base
+# image. Set it as ENV rather than appending to .bashrc so it applies to
+# non-login shells too, which is what tooling actually spawns.
+ENV PATH="/home/vscode/.local/bin:${PATH}"
+
 # vscode already has passwordless sudo in this base image, which the PAM stack
 # tests need: they install a module into a security directory and write
-# /etc/pam.d. Assert it rather than assuming it stays true.
-RUN su - vscode -c 'sudo -n true' && echo "passwordless sudo: ok"
+# /etc/pam.d. Assert both that and the CLI rather than assuming they hold.
+RUN su - vscode -c 'sudo -n true' && echo "passwordless sudo: ok" \
+    && su - vscode -c '/home/vscode/.local/bin/claude --version' \
+    && echo "claude cli: ok"
+
+# Default to vscode, so the image behaves the same whether it is started by
+# the devcontainer CLI (which also gets remoteUser/containerUser from
+# devcontainer.json) or by a plain `docker run`. Ending a Dockerfile as root
+# is how a session silently ends up writing root-owned files into a
+# bind-mounted worktree.
+#
+# Safe with devcontainer features: the CLI generates its own layer that
+# re-asserts root before running feature installers.
+USER vscode

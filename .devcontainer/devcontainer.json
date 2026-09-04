@@ -22,6 +22,18 @@
   "workspaceMount": "source=${localEnv:HOME}/git,target=/workspace,type=bind",
   "workspaceFolder": "/workspace/ssoossh-pam-c",
 
+  // Stated explicitly rather than inherited. The base image carries metadata
+  // naming vscode as the remote user, but a custom Dockerfile whose last
+  // instruction runs as root does not reliably carry that through -- and the
+  // failure mode is a session running as root, which then leaves root-owned
+  // build output in a bind-mounted worktree.
+  "remoteUser": "vscode",
+  "containerUser": "vscode",
+  // vscode is uid 1000 in the image and the host user is uid 1000, so the
+  // bind mount needs no remapping. Left on so it self-corrects if either
+  // side ever changes.
+  "updateRemoteUserUID": true,
+
   "features": {
     // Sibling containers via the host daemon. The socket mount below grants
     // the access; this feature installs the CLI and fixes group membership
