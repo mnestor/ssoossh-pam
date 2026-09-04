@@ -1,0 +1,25 @@
+# How to add to this file:
+#
+#   * Anchor with a leading "/" unless the rule genuinely has to match at
+#     every depth. An unanchored prefix glob is how a source file ends up
+#     invisible in a fresh clone while still working on the machine that
+#     wrote it.
+#   * A gitlink (an embedded repo) is not a directory as far as ignore
+#     matching is concerned, so a trailing slash will not match one.
+
+# Build output.
+/build/
+/pam_ssoossh.so
+/pam_ssoossh.bundle
+/tests/pamtest
+
+# Third-party skill checkouts, which carry their own .git.
+/.claude/skills
+
+# Agent-Native local plan bridge token and generated preview. The plan MDX
+# itself is tracked.
+/plans/*/.plan-url
+/plans/*/preview.html
+
+# Agent scratch written by hooks.
+/.claude/pending-changes.md
