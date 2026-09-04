@@ -1305,8 +1305,17 @@ harnesses, and the four-platform CI matrix.
     ["Hardening flags land", "readelf", "BIND_NOW, GNU_RELRO, non-executable stack"],
     ["Version line reports linked crypto", "ran it, read journald", "pam_ssoossh: <version> | crypto: OpenSSL 3.5.7 9 Jun 2026"],
     ["Debug gating works", "same run, both directions", "suppressed before enable, emitted after"],
+    ["Loads in a real PAM stack", "installed into the security dir in the devcontainer, driven through libpam by tests/pamtest", "version line and denial reached syslog; pam_start/pam_authenticate/pam_end clean"],
+    ["`sufficient` falls through as documented", "same run: pam_ssoossh then pam_permit", "module denied, stack continued, auth=Success from the next module"],
+    ["CI workflow and shell are valid", "actionlint, shellcheck, clang-format, cppcheck via make lint", "clean"],
   ]}
 />
+
+The PAM-stack row is the one worth calling out: the module denied and the
+stack still reported success, because `pam_permit` came next under a
+`sufficient` entry. That is the control-flag decision behaving exactly as
+documented, observed rather than reasoned about — and it is the same mechanism
+a denied approval will travel through in production.
 
 <Callout id="p0-ubi8" tone="risk">
 
@@ -1319,11 +1328,16 @@ the floor itself changed.
 
 </Callout>
 
-Two P0 verifications are outstanding and both need root, which this environment
-does not have: installing the module into a security directory and driving it
-through a real PAM stack with `tests/pamtest`, and the macOS SDK check, which
-needs a macOS host. The recipe for the first is in `tests/README.md`; the second
-runs in CI on the first push.
+P0 is verified end to end on Linux. The development container closed the last
+gap: it has passwordless `sudo`, so the module can be installed into a security
+directory and driven through a real PAM stack without needing privileges on the
+host.
+
+What remains unverified is the two platforms no machine here can build:
+**FreeBSD and macOS**. Their Makefile branches, the `ld64` symbol list, and the
+Sequoia SDK check are written but have never executed. First real signal is the
+CI run on the first push, and until then the platform matrix is a design, not a
+result.
 
 ### Open Questions
 
