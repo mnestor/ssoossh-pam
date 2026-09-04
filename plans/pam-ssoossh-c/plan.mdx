@@ -922,8 +922,8 @@ vendored jsmn symbols as effectively as the ELF version script does.
           data: {
             filename: ".github/workflows/ci.yml",
             language: "yaml",
-            caption: "No infrastructure to own. The ubi8 job is the one that keeps the version floor honest — it is the only build that compiles the OpenSSL 1.1.1 and curl_multi_wait paths.",
-            code: "jobs:\n  linux:\n    strategy:\n      matrix:\n        include:\n          - { name: debian12, container: 'debian:12' }        # OpenSSL 3.0, curl 7.88\n          - { name: alpine,   container: 'alpine:3' }         # musl\n          - { name: ubi8,     container: 'registry.access.redhat.com/ubi8/ubi' }\n    runs-on: ubuntu-latest                                    # ^ OpenSSL 1.1.1k, curl 7.61.1\n    container: ${{ matrix.container }}\n    steps: [ ..., run: make test && make san ]\n\n  freebsd:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: cross-platform-actions/action@v0\n        with:\n          operating_system: freebsd\n          version: '14.2'\n          run: pkg install -y gmake curl && gmake test\n\n  macos:\n    runs-on: macos-15   # arm64, Sequoia\n    steps: [ ..., run: make test ]   # no brew install step\n",
+            caption: "No infrastructure to own. The el8 job is the one that keeps the version floor honest — it is the only build that compiles the OpenSSL 1.1.1 and curl_multi_wait paths. AlmaLinux rather than Red Hat's ubi8, because pam-devel is absent from the unentitled UBI repositories, so a UBI job cannot build this module at all.",
+            code: "jobs:\n  linux:\n    strategy:\n      matrix:\n        include:\n          - { name: debian12, container: 'debian:12' }   # OpenSSL 3.0.20, gcc 12.2\n          - { name: alpine,   container: 'alpine:3' }    # musl, OpenSSL 3.5.8, gcc 15.2\n          - { name: el8,      container: 'almalinux:8' } # OpenSSL 1.1.1k, curl 7.61.1, gcc 8.5\n    runs-on: ubuntu-latest\n    container: ${{ matrix.container }}\n    steps: [ ..., run: make test && make san ]\n\n  freebsd:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: cross-platform-actions/action@v0.27.0\n        with:\n          operating_system: freebsd\n          version: '14.2'\n          run: sudo pkg install -y gmake pkgconf && gmake test\n\n  macos:\n    runs-on: macos-15   # arm64, Sequoia\n    steps: [ ..., run: make test ]   # no brew install step\n",
           },
         },
       ],
@@ -1286,11 +1286,48 @@ Ed25519 verifier would close it without adding a linked dependency, and remains
 available if the limit ever becomes real for a deployment; it is not worth
 carrying extra crypto code in a root process on the chance.
 
-Nothing material is left undecided. P0 is unblocked: it needs the Makefile, the
-two symbol lists, a `pam_sm_authenticate` that logs the version and denies, and
-the four-platform CI matrix — no answer below is a prerequisite for any of it.
+## P0: done
+
+Committed in this repository. The build system, both symbol lists, the module
+skeleton that logs its version and denies, `syslog` logging, the two test
+harnesses, and the four-platform CI matrix.
+
+<Table
+  id="p0-evidence"
+  density="compact"
+  columns={["Claim", "How it was checked", "Result"]}
+  rows={[
+    ["Builds on the version floor", "almalinux:8 container, real build", "gcc 8.5.0, OpenSSL 1.1.1k, curl 7.61.1 — build and gates pass"],
+    ["Builds on a modern glibc target", "debian:12 container", "gcc 12.2, OpenSSL 3.0.20 — build, gates, and sanitiser build pass"],
+    ["Builds on musl", "alpine:3 container", "gcc 15.2, OpenSSL 3.5.8 — build and gates pass"],
+    ["Exports exactly two symbols", "make check-symbols, plus nm by hand", "pam_sm_authenticate, pam_sm_setcred, and nothing else"],
+    ["Internals stay hidden", "tests/loadtest through the dynamic loader", "passes; and verified to FAIL against a build compiled without the visibility controls"],
+    ["Hardening flags land", "readelf", "BIND_NOW, GNU_RELRO, non-executable stack"],
+    ["Version line reports linked crypto", "ran it, read journald", "pam_ssoossh: <version> | crypto: OpenSSL 3.5.7 9 Jun 2026"],
+    ["Debug gating works", "same run, both directions", "suppressed before enable, emitted after"],
+  ]}
+/>
+
+<Callout id="p0-ubi8" tone="risk">
+
+**One planned detail did not survive contact: the `ubi8` CI image.**
+`pam-devel` is not in Red Hat's unentitled UBI repositories — its CodeReady
+Builder subset does not carry it — so a UBI job cannot build this module at all.
+The job runs on `almalinux:8` instead, which is the same RHEL 8 ABI and was
+confirmed to ship the same versions the floor was chosen around. Nothing about
+the floor itself changed.
+
+</Callout>
+
+Two P0 verifications are outstanding and both need root, which this environment
+does not have: installing the module into a security directory and driving it
+through a real PAM stack with `tests/pamtest`, and the macOS SDK check, which
+needs a macOS host. The recipe for the first is in `tests/README.md`; the second
+runs in CI on the first push.
 
 ### Open Questions
+
+Nothing material is left undecided, and nothing below blocks P1.
 
 <QuestionForm
   id="open-questions"
