@@ -40,18 +40,15 @@ On Linux that links `-lpam_misc` for `misc_conv`; on FreeBSD and macOS it uses
 ### Install the module
 
 ```console
-# Debian, Ubuntu
-$ sudo install -m 0644 pam_ssoossh.so /lib/x86_64-linux-gnu/security/
-
-# RHEL family
-$ sudo install -m 0644 pam_ssoossh.so /lib64/security/
-
-# Alpine
-$ sudo install -m 0644 pam_ssoossh.so /lib/security/
-
-# FreeBSD
-$ sudo install -m 0644 pam_ssoossh.so /usr/local/lib/security/
+$ sudo make install
+installed /lib/x86_64-linux-gnu/security/pam_ssoossh.so
 ```
+
+`make install` finds the directory rather than being told it: Debian puts PAM
+modules under a multiarch triplet, the RHEL family under `lib64`, Alpine under
+`/usr/lib/security`, and FreeBSD under its local prefix. It prints where the
+module landed, and `make install SECURITYDIR=<dir>` overrides the search for a
+layout it does not know.
 
 On macOS, do not install into `/usr/lib/pam/` — it is protected by System
 Integrity Protection. A `pam.d` entry accepts an absolute path, so point it
@@ -128,6 +125,15 @@ $ make ci-local                 # the whole push event
 $ make ci-local JOB=linux       # one job
 $ act push -j linux --matrix name:el8   # one matrix entry
 ```
+
+If a run fails at `Set up job` with `error getting credentials - err: exit
+status 255`, that is not the workflow. VS Code's dev containers extension
+writes a `credsStore` into `~/.docker/config.json` naming a helper that shells
+out to the extension's own server process, and in a session that is not the
+extension's — an SSH login, a `docker exec`, this container after the window
+is closed — the helper exits 255. `docker` shrugs that off; act does not.
+`make ci-local` detects a helper that will not answer and runs act with an
+empty docker config instead, so this only bites a bare `act` invocation.
 
 Because every job in `ci.yml` runs inside its own `container:`, what act
 executes is close to what GitHub will — the runner image is only a host for

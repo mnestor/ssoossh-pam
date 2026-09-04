@@ -11,7 +11,30 @@
 # console mode is not compiled into it.
 
 UNAME  := $(shell uname -s)
-PREFIX ?= /usr/local
+ARCH   := $(shell uname -m)
+
+# Where libpam looks for modules. There is no portable answer -- Debian puts
+# it under a multiarch triplet, the RHEL family under lib64, Alpine under
+# /usr/lib, FreeBSD under its local prefix, and usr-merge moved several of
+# them within living memory -- and installing to the wrong one produces a
+# module that loads for nobody, with no error anywhere to say so. So the
+# directory is discovered rather than assumed: the first of these that
+# actually exists on the machine doing the install. Where two names are the
+# same directory through a usr-merge symlink, either answer is right.
+#
+#   make install SECURITYDIR=/lib/security     to override
+#
+# Nothing matches on macOS, which is deliberate -- /usr/lib/pam is protected
+# by System Integrity Protection and a pam.d entry there takes an absolute
+# path to the build directory instead. See tests/README.md.
+SECURITYDIR ?= $(firstword $(wildcard \
+    /lib/$(ARCH)-linux-gnu/security \
+    /usr/lib/$(ARCH)-linux-gnu/security \
+    /lib64/security \
+    /usr/lib64/security \
+    /lib/security \
+    /usr/lib/security \
+    /usr/local/lib/security))
 
 # Version is stamped in at build time rather than tracked in a header, so a
 # working tree and a release build report differently on purpose. Logged at
@@ -168,8 +191,34 @@ compile_commands.json:
 #
 #   make ci-local            the whole push event
 #   make ci-local JOB=linux  one job
+#
+# The credential dance below is not incidental. act reads the docker client
+# config for registry auth before it starts a job, and VS Code's dev
+# containers extension writes a `credsStore` into it naming a helper that
+# shells out to that extension's own server process. In any session that is
+# not the extension's -- an SSH login, a docker exec, this container after
+# the window is closed -- the helper exits 255. The docker CLI treats that as
+# "no credentials" and carries on; act treats it as fatal and fails every job
+# at "Set up job", before a single step runs.
+#
+# Every image ci.yml uses is public, so when the configured helper does not
+# answer, act is pointed at a config with no helper at all. A credential
+# store that does answer is left alone, so this stays correct on a normal
+# machine and for a private image.
+ACT_DOCKER_CONFIG := $(BUILD)/act-docker
+
 ci-local:
-	@act push $(if $(JOB),-j $(JOB),) $(ACT_ARGS)
+	@helper=$$(sed -n 's/.*"credsStore"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+	    "$${DOCKER_CONFIG:-$$HOME/.docker}/config.json" 2>/dev/null); \
+	if [ -n "$$helper" ] && \
+	   ! echo '{}' | "docker-credential-$$helper" list >/dev/null 2>&1; then \
+	  echo "ci-local: credential helper '$$helper' is not answering;" \
+	       "running act with an empty docker config"; \
+	  mkdir -p $(ACT_DOCKER_CONFIG); \
+	  printf '{}\n' > $(ACT_DOCKER_CONFIG)/config.json; \
+	  export DOCKER_CONFIG="$(CURDIR)/$(ACT_DOCKER_CONFIG)"; \
+	fi; \
+	act push $(if $(JOB),-j $(JOB),) $(ACT_ARGS)
 
 ci-list:
 	@act -l
@@ -181,8 +230,12 @@ plan-serve:
 	    --dir plans/pam-ssoossh-c --kind plan --port 8787
 
 install: $(MODULE)
+	@test -n "$(SECURITYDIR)" || { \
+	  echo "install: no PAM module directory found on this system;" \
+	       "pass SECURITYDIR=<dir>" >&2; exit 1; }
 	install -d $(DESTDIR)$(SECURITYDIR)
 	install -m 0644 $(MODULE) $(DESTDIR)$(SECURITYDIR)/pam_ssoossh.so
+	@echo "installed $(DESTDIR)$(SECURITYDIR)/pam_ssoossh.so"
 
 clean:
 	rm -rf $(BUILD) pam_ssoossh.so pam_ssoossh.bundle tests/pamtest
@@ -193,6 +246,7 @@ help:
 	@echo "make san        rebuild with ASan and UBSan"
 	@echo "make tests/pamtest"
 	@echo "                build the manual PAM harness (needs libpam-misc on Linux)"
+	@echo "make install    install into $(if $(SECURITYDIR),$(SECURITYDIR),<no PAM module dir found>)"
 	@echo ""
 	@echo "VERSION=$(VERSION)"
 	@echo "OPENSSL_PREFIX= build against a self-maintained OpenSSL"

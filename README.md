@@ -27,10 +27,13 @@ Two things about it are deliberate and worth knowing before changing them:
 - **The host's Docker socket is mounted**, so `make cross` builds the module
   inside the real CI images. Those are sibling containers run by the host
   daemon, not nested ones.
-- **The workspace is mounted at its host path**, not under `/workspace`.
-  A sibling container's `-v "$PWD:/src"` is resolved by the host daemon
-  against the host filesystem, so the two paths have to agree or the bind
-  mounts the wrong thing.
+- **The host's checkout root is mounted at `/workspace`**, with this repo
+  opened at `/workspace/ssoossh-pam-c`, and where that came from exported as
+  `HOST_WORKSPACE_ROOT`. A sibling container's `-v "$PWD:/src"` is resolved
+  by the host daemon against the *host* filesystem, so a container path would
+  mount the wrong thing or nothing at all. Because the whole tree hangs off
+  one mount, translating it is a prefix swap, and `tests/cross-build.sh` is
+  the only thing that has to do it.
 
 ## Building
 

@@ -21,6 +21,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 #                     discovered at the moment it is wanted
 #   clang + llvm      libFuzzer for the P3/P5 fuzz targets, plus clang-tidy
 #                     and clang-format
+#   libclang-rt-dev   compiler-rt: the archives -fsanitize=fuzzer and clang's
+#                     own -fsanitize=address link against. clang alone does
+#                     not pull them in, and without them a fuzz target fails
+#                     at link with a missing libclang_rt.*.a rather than
+#                     anything that names the real problem. (gcc's sanitiser
+#                     build is unaffected -- libasan comes with gcc.)
 #   openssh-client    ssh-keygen, which P2 round-trips generated keys against
 #   rsyslog           the module logs to syslog and nothing else; without a
 #                     syslog sink in the container there is nothing to read
@@ -32,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         clang-format \
         clang-tidy \
         clangd \
+        libclang-rt-dev \
         lld \
         llvm \
         make \
@@ -94,13 +101,24 @@ RUN set -eux; \
     act --version
 
 # The module logs to syslog under LOG_AUTHPRIV and never to stdout or stderr,
-# so a container with no syslog sink makes its output invisible. imuxsock only
-# -- imklog needs the kernel log, which an unprivileged container cannot read.
+# so a container with no syslog sink makes its output invisible.
+#
+# Two changes to the stock Debian config, and deliberately no more:
+#
+#   * imklog is commented out -- it needs the kernel log, which an
+#     unprivileged container cannot read.
+#   * $FileCreateMode is widened to 0644 so `tail /var/log/auth.log` works
+#     without sudo. Stock is 0640 root:adm, and the module's whole output
+#     channel lands in that file.
+#
+# No routing rules of our own. Stock rsyslog.conf already sends
+# `auth,authpriv.*` to /var/log/auth.log, and a drop-in is additive, not a
+# replacement: a second rule naming the same file writes every line twice,
+# which turns "grep syslog for the version line" into a count that lies.
+# $IncludeConfig runs before the stock rules, so the mode below still applies
+# to them.
 RUN printf '%s\n' \
-    'module(load="imuxsock")' \
     '$FileCreateMode 0644' \
-    'authpriv.*  /var/log/auth.log' \
-    '*.*         /var/log/syslog' \
     > /etc/rsyslog.d/00-devcontainer.conf \
     && sed -i 's/^module(load="imklog")/#module(load="imklog")/' /etc/rsyslog.conf || true
 
