@@ -1333,11 +1333,28 @@ gap: it has passwordless `sudo`, so the module can be installed into a security
 directory and driven through a real PAM stack without needing privileges on the
 host.
 
-What remains unverified is the two platforms no machine here can build:
-**FreeBSD and macOS**. Their Makefile branches, the `ld64` symbol list, and the
-Sequoia SDK check are written but have never executed. First real signal is the
-CI run on the first push, and until then the platform matrix is a design, not a
-result.
+<Callout id="dec-linux-first" tone="decision">
+
+**FreeBSD and macOS are written but deliberately not running yet.** Their
+Makefile branches, the `ld64` symbol list, and the Sequoia SDK check all exist;
+neither platform can be built on the Linux machines this is developed on, and
+neither has ever been executed.
+
+They live in `.github/workflows/cross-platform.yml` behind `workflow_dispatch`
+rather than in the push path. Running them on every commit would produce
+failures nobody is ready to act on, on platforms nobody is working on yet. The
+order is: finish the module on Linux, where it can be iterated locally through
+`make cross` and `make ci-local`, then turn them on and deal with what they say.
+
+Until then the platform matrix is a design rather than a result, and the plan
+says so rather than implying four verified targets.
+
+</Callout>
+
+Workflows are validated locally before they are pushed. `make ci-local` runs
+`ci.yml` through `nektos/act` against the host's Docker daemon, so a workflow
+bug is caught here rather than as a red build — the same reason `make cross`
+exists for the module itself.
 
 ### Open Questions
 

@@ -1,0 +1,14 @@
+# Defaults for nektos/act, so `act` and `make ci-local` agree.
+#
+# catthehacker's image is the closest freely available stand-in for a
+# GitHub-hosted ubuntu-latest runner. The `medium` variant carries the tools
+# the workflow actually uses; the `micro` default lacks too much and the
+# `large` one is a ~40 GB pull for nothing this repo needs.
+-P ubuntu-latest=catthehacker/ubuntu:act-latest
+
+# Every job in ci.yml runs inside its own `container:`, so what the runner
+# image provides barely matters -- but act still needs one to host the job.
+--container-architecture linux/amd64
+
+# Quieter default; pass -v when a workflow misbehaves.
+--rm

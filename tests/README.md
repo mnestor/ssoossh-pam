@@ -115,3 +115,26 @@ change is portable.
 
 Red Hat's own `ubi8` cannot be used: `pam-devel` is not in the unentitled UBI
 repositories, so the module cannot be built there at all.
+
+## Validating the workflows
+
+`make cross` proves the module builds; it says nothing about whether
+`.github/workflows/ci.yml` is correct. [nektos/act](https://github.com/nektos/act)
+runs the workflow itself against the host's Docker daemon:
+
+```console
+$ make ci-list                  # what act sees
+$ make ci-local                 # the whole push event
+$ make ci-local JOB=linux       # one job
+$ act push -j linux --matrix name:el8   # one matrix entry
+```
+
+Because every job in `ci.yml` runs inside its own `container:`, what act
+executes is close to what GitHub will — the runner image is only a host for
+the job container. That makes a local run worth trusting for everything except
+runner-specific behaviour (secrets, OIDC, the hosted tool cache).
+
+FreeBSD and macOS are in `.github/workflows/cross-platform.yml` behind
+`workflow_dispatch`, and act cannot run either: there is no macOS runner to
+emulate, and the FreeBSD VM action needs nested virtualisation. They are
+deliberately not on the push path until the port is finished on Linux.

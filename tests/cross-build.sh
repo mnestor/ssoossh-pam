@@ -30,8 +30,8 @@ fi
 # image:packages-install-command
 declare -A IMAGES=(
     [debian12]="debian:12|apt-get update -qq && apt-get install -y -qq --no-install-recommends build-essential pkg-config libssl-dev libpam0g-dev"
-    [alpine]="alpine:3|apk add --no-cache build-base pkgconf openssl-dev linux-pam-dev"
-    [el8]="almalinux:8|dnf install -y -q gcc make pkgconf-pkg-config openssl-devel pam-devel"
+    [alpine]="alpine:3|apk add --no-cache build-base pkgconf openssl-dev linux-pam-dev compiler-rt"
+    [el8]="almalinux:8|dnf install -y -q gcc make pkgconf-pkg-config openssl-devel pam-devel libasan libubsan"
 )
 
 targets=("${@:-}")
@@ -66,6 +66,10 @@ for name in "${targets[@]}"; do
         printf 'libcrypto: %s\n' \"\$(pkg-config --modversion libcrypto 2>/dev/null || echo '(no pkg-config data)')\"
         make VERSION=cross-build >/dev/null
         make VERSION=cross-build test
+        # The sanitiser build too, because it needs runtime libraries the
+        # plain build does not -- an omission act caught in CI that a
+        # build-and-gate-only run here would have missed.
+        make VERSION=cross-build san >/dev/null && echo 'san: ok'
     "; then
         echo "--- $name: PASS"
     else

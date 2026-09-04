@@ -1,0 +1,62 @@
+name: Cross-platform
+
+# Manual only, on purpose.
+#
+# FreeBSD and macOS are real targets -- their Makefile branches, the ld64
+# symbol list, and the Sequoia SDK check are all written -- but neither has
+# ever been built, and neither can be built on the Linux machines this is
+# developed on. Running them on every push would produce failures nobody is
+# ready to act on, on platforms nobody is working on yet.
+#
+# The sequencing is deliberate: get the module finished and correct on Linux
+# first, where it can be iterated locally through `make cross`, then turn
+# these on and deal with whatever they say.
+#
+# Enable them in ci.yml, rather than leaving this file, once the port is far
+# enough along that a FreeBSD or macOS failure is worth interrupting for.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # No GitHub-hosted FreeBSD image exists, so it runs in a VM on the Linux
+  # runner. Slower than native and the images lag releases, but it is the
+  # option with no machine to own.
+  freebsd:
+    name: freebsd
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cross-platform-actions/action@v0.27.0
+        with:
+          operating_system: freebsd
+          version: '14.2'
+          run: |
+            sudo pkg install -y gmake pkgconf
+            gmake
+            gmake test
+
+  # Developer and CI target only: it ships no artifact and console mode is
+  # not compiled into it. It exists to keep the OpenPAM paths, the ld64
+  # symbol list, and the Security.framework backend under test.
+  macos:
+    name: macos (sequoia, arm64)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Confirm the SDK has curl headers but no OpenSSL
+        run: |
+          sdk=$(xcrun --show-sdk-path)
+          echo "SDK: $sdk"
+          test -f "$sdk/usr/include/curl/curl.h" \
+            && echo "curl headers: present" \
+            || echo "curl headers: ABSENT -- P4 needs another route"
+          test -d "$sdk/usr/include/openssl" \
+            && echo "openssl headers: present -- the macOS crypto decision needs revisiting" \
+            || echo "openssl headers: absent, as expected"
+      - name: Build
+        run: make
+      - name: Symbol and load gates
+        run: make test

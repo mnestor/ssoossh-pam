@@ -84,7 +84,8 @@ ifneq ($(OPENSSL_PREFIX),)
   LDFLAGS += -Wl,-rpath,$(OPENSSL_PREFIX)/lib
 endif
 
-.PHONY: all clean check-symbols test san install help cross lint plan-serve
+.PHONY: all clean check-symbols test san install help cross lint plan-serve \
+        ci-local ci-list
 
 all: $(MODULE)
 
@@ -160,6 +161,18 @@ lint:
 # compile_commands.json for clangd. Regenerate after adding a source file.
 compile_commands.json:
 	bear -- $(MAKE) --always-make all
+
+# Run the CI workflow locally with nektos/act, before pushing. Every job in
+# ci.yml runs in its own container, so what act reproduces is close to what
+# GitHub will do -- close enough that a workflow bug shows up here first.
+#
+#   make ci-local            the whole push event
+#   make ci-local JOB=linux  one job
+ci-local:
+	@act push $(if $(JOB),-j $(JOB),) $(ACT_ARGS)
+
+ci-list:
+	@act -l
 
 # Serves the visual plan over a localhost bridge on a fixed port, so an SSH
 # tunnel from another machine has a stable target.

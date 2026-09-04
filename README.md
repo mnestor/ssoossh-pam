@@ -40,8 +40,14 @@ $ make test     # symbol and load gates
 $ make san      # rebuild with AddressSanitizer and UndefinedBehaviorSanitizer
 $ make cross    # build and gate on every Linux image CI uses
 $ make lint     # actionlint, shellcheck, clang-format, cppcheck
+$ make ci-local # run the CI workflow locally with nektos/act
 $ make help
 ```
+
+`make ci-local` runs `.github/workflows/ci.yml` through
+[nektos/act](https://github.com/nektos/act) against the host's Docker daemon,
+so a workflow bug surfaces before it costs a red build. `make ci-list` shows
+the jobs, and `make ci-local JOB=linux` runs one.
 
 `make cross` is the one to run before claiming a change is portable — the
 `el8` image is the only place the OpenSSL 1.1.1 paths get compiled:

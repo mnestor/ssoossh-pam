@@ -76,6 +76,23 @@ RUN set -eux; \
     rm -f /tmp/actionlint.tgz; \
     actionlint --version
 
+# nektos/act, for running .github/workflows locally before pushing. It drives
+# the host's Docker daemon (mounted into this container), so the workflow runs
+# in the same images CI uses rather than an approximation of them.
+ARG ACT_VERSION=0.2.89
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+        amd64) act_arch=x86_64 ;; \
+        arm64) act_arch=arm64 ;; \
+        *) echo "unsupported arch $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/act.tgz \
+        "https://github.com/nektos/act/releases/download/v${ACT_VERSION}/act_Linux_${act_arch}.tar.gz"; \
+    tar -xzf /tmp/act.tgz -C /usr/local/bin act; \
+    rm -f /tmp/act.tgz; \
+    act --version
+
 # The module logs to syslog under LOG_AUTHPRIV and never to stdout or stderr,
 # so a container with no syslog sink makes its output invisible. imuxsock only
 # -- imklog needs the kernel log, which an unprivileged container cannot read.

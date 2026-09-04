@@ -78,7 +78,7 @@
     "HOST_WORKSPACE_ROOT": "${localEnv:HOME}/git",
     // The ssoosshd this container tests against. It fronts the dev server,
     // so no shared Docker network is needed to reach it.
-    "SSOOSSH_SERVER": "https://ssh-dev.nanaestor.us"
+    "SSOOSSH_SERVER": "https://ssh-dev.nanestor.us"
   },
 
   // 8787 is the Agent-Native plan bridge (`make plan-serve`). Bound to
