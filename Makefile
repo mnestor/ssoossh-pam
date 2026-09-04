@@ -67,9 +67,16 @@ else
   endif
 endif
 
+# pkg-config where it knows the package, plain -l otherwise. FreeBSD's base
+# OpenSSL does not always install a libcrypto.pc, and failing the whole build
+# over a missing metadata file would be silly when the library is right there.
 ifneq ($(strip $(PKGS)),)
-  CFLAGS += $(shell pkg-config --cflags $(PKGS))
-  LDLIBS += $(shell pkg-config --libs $(PKGS))
+  ifeq ($(shell pkg-config --exists $(PKGS) 2>/dev/null && echo yes),yes)
+    CFLAGS += $(shell pkg-config --cflags $(PKGS))
+    LDLIBS += $(shell pkg-config --libs $(PKGS))
+  else
+    LDLIBS += $(patsubst lib%,-l%,$(PKGS))
+  endif
 endif
 LDLIBS += -lpam
 

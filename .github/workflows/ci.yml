@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Three Linux images rather than a libc pair, because the third one is not
+  # about libc at all: el8 is the only build that compiles the OpenSSL 1.1.1
+  # and curl_multi_wait paths. Without it the version floor is an assertion
+  # in a document.
+  #
+  # AlmaLinux rather than Red Hat's own ubi8: pam-devel is not in the
+  # unentitled UBI repositories (its CodeReady Builder subset does not carry
+  # it), so a UBI job cannot build this module at all. AlmaLinux 8 is the
+  # same RHEL 8 ABI and ships the same versions -- verified locally as
+  # gcc 8.5.0, openssl-devel 1.1.1k, curl 7.61.1.
+  linux:
+    name: linux (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: debian12          # OpenSSL 3.0, curl 7.88, gcc 14
+            container: debian:12
+            install: apt-get update && apt-get install -y --no-install-recommends
+              build-essential pkg-config libssl-dev libpam0g-dev libpam-runtime git
+          - name: alpine            # musl, OpenSSL 3.5, gcc 15
+            container: alpine:3
+            install: apk add --no-cache build-base pkgconf openssl-dev linux-pam-dev git
+          - name: el8               # OpenSSL 1.1.1k, curl 7.61.1, gcc 8.5 -- the floor
+            container: almalinux:8
+            install: dnf install -y gcc make pkgconf-pkg-config openssl-devel pam-devel git
+    steps:
+      - name: Install build dependencies
+        run: ${{ matrix.install }}
+
+      - uses: actions/checkout@v4
+
+      # The version string comes from `git describe`, and a checkout owned by
+      # a different uid than the container user makes git refuse to read it.
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Report the toolchain under test
+        run: |
+          cc --version | head -1
+          pkg-config --modversion libcrypto || true
+
+      - name: Build
+        run: make
+
+      - name: Symbol and load gates
+        run: make test
+
+      - name: Sanitiser build
+        run: make san
+
+  # No GitHub-hosted FreeBSD image exists, so it runs in a VM on the Linux
+  # runner. Slower than native and the images lag releases, but it is the
+  # option with no machine to own.
+  freebsd:
+    name: freebsd
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cross-platform-actions/action@v0.27.0
+        with:
+          operating_system: freebsd
+          version: '14.2'
+          run: |
+            sudo pkg install -y gmake pkgconf
+            gmake
+            gmake test
+
+  # Developer and CI target only: it ships no artifact and console mode is
+  # not compiled into it. It is here to keep the OpenPAM paths, the ld64
+  # symbol list, and the Security.framework backend under test.
+  macos:
+    name: macos (sequoia, arm64)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Confirm the SDK has curl headers but no OpenSSL
+        run: |
+          sdk=$(xcrun --show-sdk-path)
+          echo "SDK: $sdk"
+          test -f "$sdk/usr/include/curl/curl.h" \
+            && echo "curl headers: present" \
+            || echo "curl headers: ABSENT -- P4 needs another route"
+          test -d "$sdk/usr/include/openssl" \
+            && echo "openssl headers: present -- the macOS crypto decision needs revisiting" \
+            || echo "openssl headers: absent, as expected"
+      - name: Build
+        run: make
+      - name: Symbol and load gates
+        run: make test
