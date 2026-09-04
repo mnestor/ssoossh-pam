@@ -5,14 +5,14 @@
 #include <syslog.h>
 
 #ifdef __APPLE__
-#  include <CommonCrypto/CommonCrypto.h>
+#    include <CommonCrypto/CommonCrypto.h>
 #else
-#  include <openssl/crypto.h>
-#  include <openssl/opensslv.h>
+#    include <openssl/crypto.h>
+#    include <openssl/opensslv.h>
 #endif
 
 #ifndef PAM_SSOOSSH_VERSION
-#  define PAM_SSOOSSH_VERSION "dev"
+#    define PAM_SSOOSSH_VERSION "dev"
 #endif
 
 /* Per-process, not per-transaction. A PAM transaction that turns debug on
@@ -21,7 +21,10 @@
  * security-relevant reads it. */
 static bool debug_enabled;
 
-void ssoossh_log_set_debug(bool enabled) { debug_enabled = enabled; }
+void ssoossh_log_set_debug(bool enabled)
+{
+    debug_enabled = enabled;
+}
 
 /* Every message carries the module name because openlog is not called, so
  * syslog attributes the line to the host process (sudo, sshd) instead. */
@@ -36,13 +39,13 @@ static void vlogf(int priority, const char *fmt, va_list ap)
     syslog(LOG_AUTHPRIV | priority, "pam_ssoossh: %s", msg);
 }
 
-#define DEFINE_LOGF(name, priority)                  \
-    void name(const char *fmt, ...)                  \
-    {                                                \
-        va_list ap;                                  \
-        va_start(ap, fmt);                           \
-        vlogf((priority), fmt, ap);                  \
-        va_end(ap);                                  \
+#define DEFINE_LOGF(name, priority)                                            \
+    void name(const char *fmt, ...)                                            \
+    {                                                                          \
+        va_list ap;                                                            \
+        va_start(ap, fmt);                                                     \
+        vlogf((priority), fmt, ap);                                            \
+        va_end(ap);                                                            \
     }
 
 DEFINE_LOGF(ssoossh_infof, LOG_INFO)

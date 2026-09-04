@@ -1,0 +1,29 @@
+# Close to the Linux kernel's C style, which is what most PAM module and
+# OpenSSL-adjacent code around this one looks like, with 4-space indents
+# instead of 8 -- the certificate parser nests deeply enough that 8 pushes
+# real code past the column limit.
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: c++03
+
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 80
+
+AlignAfterOpenBracket: Align
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AlwaysBreakAfterReturnType: None
+BinPackArguments: true
+BinPackParameters: true
+BreakBeforeBraces: Linux
+IndentCaseLabels: false
+# Nested preprocessor conditionals carry real meaning in this codebase -- the
+# platform branches in the crypto backend and the OpenSSL version guards --
+# so indenting them under the hash is worth the two extra columns.
+IndentPPDirectives: AfterHash
+PointerAlignment: Right
+SortIncludes: false
+SpaceAfterCStyleCast: false

@@ -16,9 +16,9 @@
 #include <string.h>
 
 #ifdef __APPLE__
-#  define MODULE_DEFAULT "./pam_ssoossh.bundle"
+#    define MODULE_DEFAULT "./pam_ssoossh.bundle"
 #else
-#  define MODULE_DEFAULT "./pam_ssoossh.so"
+#    define MODULE_DEFAULT "./pam_ssoossh.so"
 #endif
 
 /* Symbols that must resolve. */
@@ -55,8 +55,8 @@ int main(int argc, char **argv)
     for (size_t i = 0; i < sizeof(wanted) / sizeof(wanted[0]); i++) {
         (void)dlerror();
         if (dlsym(h, wanted[i]) == NULL) {
-            fprintf(stderr, "loadtest: %s did not resolve: %s\n",
-                    wanted[i], dlerror());
+            fprintf(stderr, "loadtest: %s did not resolve: %s\n", wanted[i],
+                    dlerror());
             failures++;
         }
     }

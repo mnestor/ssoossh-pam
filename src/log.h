@@ -21,7 +21,8 @@ void ssoossh_log_set_debug(bool enabled);
 
 void ssoossh_debugf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void ssoossh_infof(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
-void ssoossh_noticef(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void ssoossh_noticef(const char *fmt, ...)
+    __attribute__((format(printf, 1, 2)));
 void ssoossh_warnf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void ssoossh_errf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 

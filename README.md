@@ -15,13 +15,42 @@ system already ships.
 four target platforms, loads, reports its version, and denies. It does not
 authenticate anyone yet.
 
+## Development container
+
+`.devcontainer/` carries everything this repo needs: the C toolchain, libpam
+and its test headers, OpenSSL, libcurl, clang with libFuzzer, valgrind,
+`ssh-keygen`, a running syslog to read the module's own output from, and Node
+and Go for the plan bridge and the P6 differential harness.
+
+Two things about it are deliberate and worth knowing before changing them:
+
+- **The host's Docker socket is mounted**, so `make cross` builds the module
+  inside the real CI images. Those are sibling containers run by the host
+  daemon, not nested ones.
+- **The workspace is mounted at its host path**, not under `/workspace`.
+  A sibling container's `-v "$PWD:/src"` is resolved by the host daemon
+  against the host filesystem, so the two paths have to agree or the bind
+  mounts the wrong thing.
+
 ## Building
 
 ```console
 $ make          # builds pam_ssoossh.so (pam_ssoossh.bundle on macOS)
 $ make test     # symbol and load gates
 $ make san      # rebuild with AddressSanitizer and UndefinedBehaviorSanitizer
+$ make cross    # build and gate on every Linux image CI uses
+$ make lint     # actionlint, shellcheck, clang-format, cppcheck
 $ make help
+```
+
+`make cross` is the one to run before claiming a change is portable — the
+`el8` image is the only place the OpenSSL 1.1.1 paths get compiled:
+
+```console
+$ make cross
+=== debian12 (debian:12) ===   cc 12.2.0, libcrypto 3.0.20   PASS
+=== alpine (alpine:3) ===      cc 15.2.0, libcrypto 3.5.8    PASS
+=== el8 (almalinux:8) ===      cc  8.5.0, libcrypto 1.1.1k   PASS
 ```
 
 Build dependencies are libpam and libcrypto (libcurl joins them at P4):

@@ -13,18 +13,19 @@
 // and how to install the module for a manual run.
 #include <security/pam_appl.h>
 #ifdef __linux__
-#  include <security/pam_misc.h>
-#  define SSOOSSH_CONV misc_conv
+#    include <security/pam_misc.h>
+#    define SSOOSSH_CONV misc_conv
 #else
-#  include <security/openpam.h>
-#  define SSOOSSH_CONV openpam_ttyconv
+#    include <security/openpam.h>
+#    define SSOOSSH_CONV openpam_ttyconv
 #endif
 #include <stdio.h>
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
     const char *service = (argc > 1) ? argv[1] : "ssoossh-test";
     pam_handle_t *p = NULL;
-    struct pam_conv conv = { SSOOSSH_CONV, NULL };
+    struct pam_conv conv = {SSOOSSH_CONV, NULL};
 
     /* Unbuffered, so the approval URL reaches a pipe reader (tee, or the
      * e2e harness) while pam_authenticate is still blocked waiting on the
@@ -32,12 +33,17 @@ int main(int argc, char **argv) {
     setbuf(stdout, NULL);
 
     int r = pam_start(service, "games", &conv, &p);
-    if (r != PAM_SUCCESS) { fprintf(stderr, "start %d\n", r); return 1; }
-    int auth = pam_authenticate(p, 0); printf("auth=%s\n", pam_strerror(p, auth));
+    if (r != PAM_SUCCESS) {
+        fprintf(stderr, "start %d\n", r);
+        return 1;
+    }
+    int auth = pam_authenticate(p, 0);
+    printf("auth=%s\n", pam_strerror(p, auth));
     /* Run the account stage regardless, matching a real login flow's output,
      * but fold both results into the exit code: a permissive account stack
      * (e.g. pam_permit) must not turn a failed authentication into exit 0. */
-    r = pam_acct_mgmt(p, 0); printf("acct=%s\n", pam_strerror(p, r));
+    r = pam_acct_mgmt(p, 0);
+    printf("acct=%s\n", pam_strerror(p, r));
     pam_end(p, r);
     return (auth == PAM_SUCCESS && r == PAM_SUCCESS) ? 0 : 1;
 }

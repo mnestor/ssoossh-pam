@@ -1,0 +1,157 @@
+{
+  "name": "ssoossh-pam-c",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+
+  // The host's git checkout root is mounted as /workspace, and this repo is
+  // opened at /workspace/ssoossh-pam-c inside it.
+  //
+  // Mounting the parent rather than the repo itself buys two things: the
+  // monorepo is readable at /workspace/ssoossh for cross-referencing, and
+  // future worktrees can be cut as siblings under /workspace without
+  // touching this file.
+  //
+  // It also makes the sibling-container path problem tractable. Anything run
+  // through the host's Docker socket (see mounts) is resolved by the *host*
+  // daemon against the *host* filesystem, so a container path has to be
+  // translated before it can be used as a bind source. Because the whole
+  // tree hangs off one mount, that translation is a prefix swap:
+  // /workspace -> $HOST_WORKSPACE_ROOT. tests/cross-build.sh does exactly
+  // that, and does not have to know anything else about the layout.
+  "workspaceMount": "source=${localEnv:HOME}/git,target=/workspace,type=bind",
+  "workspaceFolder": "/workspace/ssoossh-pam-c",
+
+  "features": {
+    // Sibling containers via the host daemon. The socket mount below grants
+    // the access; this feature installs the CLI and fixes group membership
+    // so it works without sudo.
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "moby": false,
+      "installDockerBuildx": true
+    },
+    // Node 22+ is required by @agent-native/core, which serves the visual
+    // plan over a localhost bridge.
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22"
+    },
+    // Matches the monorepo's go.mod (go 1.27). Needed for P6's differential
+    // harness, which builds the Go PAM module and compares its answers
+    // against this one's.
+    "ghcr.io/devcontainers/features/go:1": {
+      "version": "1.27"
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+
+  "mounts": [
+    // The host's Docker daemon: sibling containers, not nested. This is what
+    // lets `make cross` build the module inside the real CI images.
+    "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
+
+    // Personal tooling config, mounted from the host rather than baked into
+    // the image. Same arrangement as the monorepo's devcontainers.
+    "source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind",
+    // Mounted inside .claude (a directory mount) instead of directly onto
+    // ~/.claude.json -- a lone-file bind mount is itself a mount point, and
+    // Linux refuses to rename() onto a mount point, which breaks Claude
+    // Code's atomic temp-file+rename save for that file. postCreateCommand
+    // symlinks ~/.claude.json to this path so saves land inside the
+    // directory mount instead, where rename works.
+    "source=${localEnv:HOME}/.claude.json,target=/home/vscode/.claude/.claude.json.host,type=bind",
+    "source=${localEnv:HOME}/.local/bin/rtk,target=/home/vscode/.local/bin/rtk,type=bind",
+    "source=${localEnv:HOME}/.local/share/rtk,target=/home/vscode/.local/share/rtk,type=bind",
+    "source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind",
+    "source=${localEnv:HOME}/.config/rtk,target=/home/vscode/.config/rtk,type=bind",
+
+    // codebase-memory-mcp is a ~300 MB self-contained binary; mounted from
+    // the host rather than baked into the image, with its index cache
+    // alongside so it is not rebuilt on every container create.
+    "source=${localEnv:HOME}/.local/bin/codebase-memory-mcp,target=/home/vscode/.local/bin/codebase-memory-mcp,type=bind",
+    "source=${localEnv:HOME}/.cache/codebase-memory-mcp,target=/home/vscode/.cache/codebase-memory-mcp,type=bind"
+  ],
+
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
+    // The host path /workspace corresponds to. Sibling containers get their
+    // bind sources rewritten through this -- see tests/cross-build.sh.
+    "HOST_WORKSPACE_ROOT": "${localEnv:HOME}/git",
+    // The ssoosshd this container tests against. It fronts the dev server,
+    // so no shared Docker network is needed to reach it.
+    "SSOOSSH_SERVER": "https://ssh-dev.nanaestor.us"
+  },
+
+  // 8787 is the Agent-Native plan bridge (`make plan-serve`). Bound to
+  // 0.0.0.0 so it is reachable through an SSH tunnel from another machine,
+  // which is how the plan gets reviewed when this runs on a remote host.
+  "appPort": ["0.0.0.0:8787:8787"],
+
+  "runArgs": [
+    "--name=ssoossh-pam-c",
+    // The module is dlopen'd into other processes; being able to attach a
+    // debugger to one of them is the difference between reading a crash and
+    // guessing at it.
+    "--cap-add=SYS_PTRACE",
+    "--security-opt",
+    "seccomp=unconfined"
+  ],
+
+  "shutdownAction": "none",
+
+  "postCreateCommand": {
+    "workspace-ownership": "sudo chown vscode:vscode /workspace",
+    "allow-git": "git config --global --add safe.directory ${containerWorkspaceFolder} && git config --global --add safe.directory /workspace/ssoossh",
+    "link-claude-json": "ln -sf /home/vscode/.claude/.claude.json.host /home/vscode/.claude.json",
+    "cbm-start": "codebase-memory-mcp daemon start",
+    "cbm-index": "codebase-memory-mcp cli index_repository --repo_path ${containerWorkspaceFolder}",
+    "cbm-auto-index": "codebase-memory-mcp config set auto_index true"
+  },
+
+  // rsyslog is not init-managed in a container, so it has to be started per
+  // boot. Without it the module's only output channel goes nowhere and every
+  // verification that reads a log line is untestable. The daemon restart is
+  // here rather than in postCreate for the same reason.
+  "postStartCommand": {
+    "syslog": "sudo service rsyslog start >/dev/null 2>&1 || sudo rsyslogd",
+    "cbm-start": "codebase-memory-mcp daemon start >/dev/null 2>&1 || true"
+  },
+
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "todo-tree.ripgrep.ripgrep": "/usr/bin/rg",
+        "dev.containers.copyGitConfig": true,
+        "C_Cpp.intelliSenseEngine": "disabled",
+        "clangd.arguments": ["--compile-commands-dir=${workspaceFolder}"],
+        "editor.formatOnSave": true,
+        "[c]": {
+          "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+        }
+      },
+      "extensions": [
+        "llvm-vs-code-extensions.vscode-clangd",
+        "ms-vscode.makefile-tools",
+        "golang.go",
+        "redhat.vscode-yaml",
+        "timonwong.shellcheck",
+        "shardulm94.trailing-spaces",
+        "Gruntfuggly.todo-tree",
+        "dnut.rewrap-revived",
+        "vscode-icons-team.vscode-icons",
+        "IBM.output-colorizer",
+        "EditorConfig.EditorConfig",
+        "anthropic.claude-code"
+      ]
+    }
+  },
+
+  "otherPortsAttributes": {
+    "onAutoForward": "silent"
+  },
+  "portsAttributes": {
+    "8787": {
+      "label": "Agent-Native plan bridge",
+      "protocol": "http"
+    }
+  }
+}

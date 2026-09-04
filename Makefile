@@ -84,7 +84,7 @@ ifneq ($(OPENSSL_PREFIX),)
   LDFLAGS += -Wl,-rpath,$(OPENSSL_PREFIX)/lib
 endif
 
-.PHONY: all clean check-symbols test san install help
+.PHONY: all clean check-symbols test san install help cross lint plan-serve
 
 all: $(MODULE)
 
@@ -133,6 +133,39 @@ test: check-symbols tests/loadtest
 san: CFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer -O1
 san: LDFLAGS += -fsanitize=address,undefined
 san: clean all
+
+# Build and gate on every Linux image CI uses, through the host's Docker
+# daemon. `make cross IMAGES=el8` for one.
+cross:
+	@tests/cross-build.sh $(IMAGES)
+
+# Every tool here is in the devcontainer. Outside it, a missing one is
+# reported and skipped rather than failing the target: a partial lint is more
+# use than an error about a tool the caller may not want to install.
+lint:
+	@rc=0; \
+	for t in actionlint shellcheck clang-format cppcheck; do \
+	  command -v $$t >/dev/null || { echo "lint: $$t not installed, skipping"; continue; }; \
+	  case $$t in \
+	    actionlint)    actionlint || rc=1 ;; \
+	    shellcheck)    shellcheck tests/*.sh || rc=1 ;; \
+	    clang-format)  clang-format --dry-run --Werror src/*.c src/*.h tests/*.c || rc=1 ;; \
+	    cppcheck)      cppcheck --quiet --error-exitcode=1 \
+	                     --enable=warning,portability \
+	                     --suppress=missingIncludeSystem -Isrc src tests || rc=1 ;; \
+	  esac; \
+	done; \
+	[ $$rc -eq 0 ] && echo "lint: ok"; exit $$rc
+
+# compile_commands.json for clangd. Regenerate after adding a source file.
+compile_commands.json:
+	bear -- $(MAKE) --always-make all
+
+# Serves the visual plan over a localhost bridge on a fixed port, so an SSH
+# tunnel from another machine has a stable target.
+plan-serve:
+	npx -y @agent-native/core@latest plan local serve \
+	    --dir plans/pam-ssoossh-c --kind plan --port 8787
 
 install: $(MODULE)
 	install -d $(DESTDIR)$(SECURITYDIR)
