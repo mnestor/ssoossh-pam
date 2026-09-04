@@ -4,12 +4,8 @@
 #include <stdio.h>
 #include <syslog.h>
 
-#ifdef __APPLE__
-#    include <CommonCrypto/CommonCrypto.h>
-#else
-#    include <openssl/crypto.h>
-#    include <openssl/opensslv.h>
-#endif
+#include "crypto.h"
+#include "httpc.h"
 
 #ifndef PAM_SSOOSSH_VERSION
 #    define PAM_SSOOSSH_VERSION "dev"
@@ -67,21 +63,14 @@ void ssoossh_debugf(const char *fmt, ...)
     va_end(ap);
 }
 
-/* Names the crypto actually linked into this process.
- *
- * On macOS there is no version to report: Security.framework and
- * CommonCrypto ship with the OS and carry no independently queryable
- * version, so the backend is named instead. */
-static const char *crypto_version(void)
-{
-#ifdef __APPLE__
-    return "Security.framework";
-#else
-    return OpenSSL_version(OPENSSL_VERSION);
-#endif
-}
-
 void ssoossh_log_version(void)
 {
-    ssoossh_infof("%s | crypto: %s", PAM_SSOOSSH_VERSION, crypto_version());
+    /* The linked library versions, not ours: this module links crypto and
+     * HTTP rather than shipping them, so which OpenSSL and which libcurl
+     * are resident in sudo is a property of the host. One line per
+     * authentication is what makes that a syslog grep across a fleet
+     * instead of guesswork -- including for a host whose distribution has
+     * stopped issuing updates. */
+    ssoossh_infof("%s | crypto: %s | http: %s", PAM_SSOOSSH_VERSION,
+                  ssoossh_crypto_version(), ssoossh_httpc_version());
 }

@@ -53,7 +53,30 @@ endif
 MODULE  := pam_ssoossh.so
 BUILD   := build
 
-SRC     := $(wildcard src/*.c)
+# Sanitiser flags have to reach the link line of the shared object and of
+# the test binary, which have nothing else in common -- LDFLAGS proper
+# carries -shared and the version script, and an executable must inherit
+# neither. See the san target.
+SANCFLAGS  :=
+SANLDFLAGS :=
+ifeq ($(SAN),1)
+  SANCFLAGS  := -fsanitize=address,undefined -fno-omit-frame-pointer -O1
+  SANLDFLAGS := -fsanitize=address,undefined
+  CFLAGS     += $(SANCFLAGS)
+  LDFLAGS    += $(SANLDFLAGS)
+endif
+
+# Exactly one crypto backend is compiled. Both are always present in the
+# tree so a change to the seam breaks the build of the platform it was not
+# written on -- but only the one this platform can link is fed to the
+# compiler.
+SRC     := $(filter-out src/crypto_openssl.c src/crypto_darwin.c, \
+                        $(wildcard src/*.c))
+ifeq ($(UNAME),Darwin)
+  SRC   += src/crypto_darwin.c
+else
+  SRC   += src/crypto_openssl.c
+endif
 OBJ     := $(patsubst src/%.c,$(BUILD)/%.o,$(SRC))
 
 CFLAGS  += -std=c11 -O2 -fPIC \
@@ -65,10 +88,7 @@ CFLAGS  += -std=c11 -O2 -fPIC \
            -DPAM_SSOOSSH_VERSION='"$(VERSION)"'
 CPPFLAGS += -Isrc
 
-# libcurl joins this list in P4, when src/httpc.c exists. Adding it before
-# there is anything to link would only make the build need a package it does
-# not yet use.
-PKGS    := libcrypto
+PKGS    := libcrypto libcurl
 
 ifeq ($(UNAME),Darwin)
   # Apple's own crypto: no OpenSSL, no Homebrew, nothing to install.
@@ -144,19 +164,50 @@ check-symbols: $(MODULE)
 PAMTEST_LIBS ?= $(if $(filter Linux,$(UNAME)),-lpam_misc,)
 
 tests/pamtest: tests/pamtest.c
-	$(CC) -std=c11 -O1 -Wall -Wextra -o $@ $< -lpam $(PAMTEST_LIBS)
+	$(CC) -std=c11 -O1 -Wall -Wextra $(SANCFLAGS) $(SANLDFLAGS) \
+	    -o $@ $< -lpam $(PAMTEST_LIBS)
 
 # Runs anywhere, including CI: proves the module loads and that exactly the
 # right symbols are reachable through the dynamic loader.
+#
+# Built with the sanitisers when SAN=1, because it dlopens a module that
+# was: an ASan-instrumented shared object loaded into an uninstrumented
+# program aborts before it runs a single test.
 tests/loadtest: tests/loadtest.c
-	$(CC) -std=c11 -O1 -Wall -Wextra -Werror -o $@ $< $(if $(filter Darwin,$(UNAME)),,-ldl)
+	$(CC) -std=c11 -O1 -Wall -Wextra -Werror $(SANCFLAGS) $(SANLDFLAGS) \
+	    -o $@ $< $(if $(filter Darwin,$(UNAME)),,-ldl)
 
-test: check-symbols tests/loadtest
+# The unit suite links the module's own objects rather than recompiling
+# them, so what the tests exercise is the code that ships -- same flags,
+# same warnings, same -fvisibility=hidden. Hidden visibility is no obstacle
+# inside a single executable, and building the sources a second way to make
+# them testable would mean the tested build and the shipped one could
+# differ.
+UNIT_SRC := $(wildcard tests/unit/*.c)
+UNIT_OBJ := $(patsubst tests/unit/%.c,$(BUILD)/unit/%.o,$(UNIT_SRC))
+
+$(BUILD)/unit:
+	@mkdir -p $(BUILD)/unit
+
+$(BUILD)/unit/%.o: tests/unit/%.c | $(BUILD)/unit
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+tests/unit_tests: $(OBJ) $(UNIT_OBJ)
+	$(CC) $(SANLDFLAGS) -o $@ $^ $(LDLIBS)
+
+test: check-symbols tests/loadtest tests/unit_tests
 	@./tests/loadtest ./$(MODULE)
+	@./tests/unit_tests
 
-san: CFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer -O1
-san: LDFLAGS += -fsanitize=address,undefined
-san: clean all
+# make SAN=1 turns the sanitisers on for everything built in that
+# invocation, the unit suite included -- which is the point of it being a
+# switch rather than a target: the parsers are where ASan and UBSan earn
+# their keep, and those are only reachable from the tests.
+#
+# `make san` is that plus the clean rebuild the changed flags require.
+san:
+	@$(MAKE) --no-print-directory clean
+	@$(MAKE) --no-print-directory SAN=1 all test
 
 # Build and gate on every Linux image CI uses, through the host's Docker
 # daemon. `make cross IMAGES=el8` for one.
@@ -238,7 +289,8 @@ install: $(MODULE)
 	@echo "installed $(DESTDIR)$(SECURITYDIR)/pam_ssoossh.so"
 
 clean:
-	rm -rf $(BUILD) pam_ssoossh.so pam_ssoossh.bundle tests/pamtest
+	rm -rf $(BUILD) pam_ssoossh.so pam_ssoossh.bundle tests/pamtest \
+	       tests/loadtest tests/unit_tests
 
 help:
 	@echo "make            build $(MODULE) for $(UNAME)"
