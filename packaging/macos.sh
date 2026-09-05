@@ -114,6 +114,10 @@ minver=${minver%%-*}.0
 name=$(basename "$tarball" .tar.gz)
 mkdir -p "$outdir"
 outdir=$(cd "$outdir" && pwd)
+# The package this script writes, read again by every signing, notarization
+# and listing step at the end. A shell has no scoping to protect it, so
+# nothing below may reuse the name -- the functions above capture what a
+# command said in `said` for that reason.
 out=$outdir/$name.pkg
 
 # The payload, laid out as it will land on the host.
@@ -196,16 +200,16 @@ import_p12() {
             "the field holds something that is not the base64 of a .p12" >&2
         exit 1
     fi
-    if out=$(security import "$2" -k "$keychain" \
+    if said=$(security import "$2" -k "$keychain" \
         -P "${QUILL_SIGN_PASSWORD:-}" \
         -T /usr/bin/codesign -T /usr/bin/productsign \
         -T /usr/bin/security 2>&1); then
         echo "macos: $1: $size bytes, sha256 $digest;" \
-            "${out:-security import printed nothing}"
+            "${said:-security import printed nothing}"
     else
         echo "macos: $1: $size bytes, sha256 $digest;" \
-            "security import failed: ${out:-no output}" >&2
-        case ${out:-} in
+            "security import failed: ${said:-no output}" >&2
+        case ${said:-} in
         *"MAC verification failed"*)
             # Two very different faults share this one message, and the
             # second is the one nobody guesses: this importer reads only the
@@ -266,9 +270,9 @@ if [ -n "${QUILL_SIGN_P12:-}" ]; then
     # far less than the identity checks just below it do. Let those speak.
     # If the keys are there and this still failed, codesign says so itself a
     # few lines further on, and just as loudly.
-    if ! out=$(security set-key-partition-list -S apple-tool:,apple: -s \
+    if ! said=$(security set-key-partition-list -S apple-tool:,apple: -s \
         -k "$kcpass" "$keychain" 2>&1); then
-        echo "macos: set-key-partition-list: ${out:-no output}" >&2
+        echo "macos: set-key-partition-list: ${said:-no output}" >&2
     fi
 
     sign_app=$(security find-identity -v -p codesigning "$keychain" |
