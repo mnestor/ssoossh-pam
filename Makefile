@@ -90,11 +90,22 @@ BUILD   := build
 # neither. See the san target.
 SANCFLAGS  :=
 SANLDFLAGS :=
+# --no-undefined on the module, except under the sanitisers. GCC links the
+# shared ASan runtime, so a sanitised shared object resolves; clang links the
+# static one and leaves the runtime out of a -shared link entirely, so every
+# __asan_* and __ubsan_* call in the module is undefined at link time. That is
+# how clang means it to be -- the instrumented .so takes its runtime from the
+# process that loads it, and the executables here (loadtest, unit_tests,
+# pamtest) are all built with the same flags, so the symbols are there when it
+# is dlopened. Keeping --no-undefined would fail the link on every clang
+# platform, FreeBSD included, where cc is clang and there is no libasan.so.
+NOUNDEF    := -Wl,--no-undefined
 ifeq ($(SAN),1)
   SANCFLAGS  := -fsanitize=address,undefined -fno-omit-frame-pointer -O1
   SANLDFLAGS := -fsanitize=address,undefined
   CFLAGS     += $(SANCFLAGS)
   LDFLAGS    += $(SANLDFLAGS)
+  NOUNDEF    :=
 else
   # Fortify only outside the sanitiser build. ASan checks the same accesses
   # more thoroughly, and clang predefines _FORTIFY_SOURCE 0 under
@@ -153,7 +164,7 @@ ifeq ($(UNAME),Darwin)
   STRIP   := strip -x
 else
   STRIP   := strip --strip-unneeded
-  LDFLAGS += -shared -Wl,--no-undefined \
+  LDFLAGS += -shared $(NOUNDEF) \
              -Wl,-z,relro,-z,now -Wl,-z,noexecstack \
              -Wl,--version-script=pam_ssoossh.map
   ifeq ($(UNAME),Linux)
