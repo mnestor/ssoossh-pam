@@ -54,14 +54,21 @@ skip() { printf '  %-18s SKIP (%s)\n' "$1" "$2"; }
 # looks local to the environment and has an sshd ancestor regardless.
 # comm is basenamed because macOS ps prints the full path where Linux and
 # FreeBSD print the name.
+#
+# One -o per column, not "-o ppid=,comm=". POSIX lets an empty header run to
+# the end of the argument, so BSD ps reads that second spelling as ppid alone
+# under the header ",comm=" -- one column, and a header line where a pid was
+# expected. GNU ps splits it on the comma and both look alike on Linux.
 under_sshd() {
     local pid=$$ ppid comm
 
     for _ in $(seq 1 64); do
         [ "$pid" -gt 1 ] || return 1
-        read -r ppid comm < <(ps -o ppid=,comm= -p "$pid" 2>/dev/null) ||
+        read -r ppid comm < <(ps -o ppid= -o comm= -p "$pid" 2>/dev/null) ||
             return 1
-        [ -n "${ppid:-}" ] || return 1
+        # Anything but a pid means the walk has lost the thread -- ps said
+        # something unexpected, or the process went away mid-walk.
+        case "$ppid" in '' | *[!0-9]*) return 1 ;; esac
         case "${comm##*/}" in sshd*) return 0 ;; esac
         [ "$ppid" != "$pid" ] || return 1
         pid="$ppid"
