@@ -24,6 +24,7 @@ int suite_principals_map(void);
 int suite_checks(void);
 int suite_localaddrs(void);
 int suite_console(void);
+int suite_hostinfo(void);
 #ifndef __APPLE__
 int suite_qr(void);
 #endif

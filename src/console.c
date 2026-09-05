@@ -27,6 +27,7 @@ void ssoossh_context_read(pam_handle_t *pamh, ssoossh_request_context *out)
     read_item(pamh, PAM_SERVICE, out->service, sizeof(out->service));
     read_item(pamh, PAM_TTY, out->tty, sizeof(out->tty));
     read_item(pamh, PAM_RHOST, out->rhost, sizeof(out->rhost));
+    read_item(pamh, PAM_RUSER, out->ruser, sizeof(out->ruser));
 
     if (gethostname(out->hostname, sizeof(out->hostname)) != 0) {
         out->hostname[0] = '\0';

@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <security/pam_modules.h>
 
@@ -26,6 +27,7 @@
 #include "console.h"
 #include "conv.h"
 #include "crypto.h"
+#include "hostinfo.h"
 #include "httpc.h"
 #include "json.h"
 #include "localaddrs.h"
@@ -109,16 +111,66 @@ static bool on_event(const char *name, const char *data, size_t data_len,
     return false; /* stop the stream: this is the answer */
 }
 
-/* Builds the create-request body. The field order is the Go struct's, and
- * an empty optional is omitted rather than sent empty, because that is what
- * encoding/json's omitempty does and the wire is a contract. */
+/* The mode argument as the pam.d line gave it. */
+static const char *mode_name(ssoossh_mode mode)
+{
+    switch (mode) {
+    case SSOOSSH_MODE_CONSOLE:
+        return "console";
+    case SSOOSSH_MODE_SUDO:
+        return "sudo";
+    case SSOOSSH_MODE_AUTO:
+    default:
+        return "auto";
+    }
+}
+
+/* One optional string field: ",\"name\":\"value\"", or nothing at all when
+ * the value is empty. That is encoding/json's omitempty, and the wire is a
+ * contract: the server distinguishes "not sent" from "sent empty". */
+static bool append_opt(attempt *a, size_t *len, const char *name,
+                       const char *value)
+{
+    if (value[0] == '\0') {
+        return true;
+    }
+    return ssoossh_json_append(a->body, sizeof(a->body), len, ",\"") &&
+           ssoossh_json_append(a->body, sizeof(a->body), len, name) &&
+           ssoossh_json_append(a->body, sizeof(a->body), len, "\":") &&
+           ssoossh_json_append_string(a->body, sizeof(a->body), len, value);
+}
+
+/* A JSON integer field, always sent. */
+static bool append_int(attempt *a, size_t *len, const char *name,
+                       long long value)
+{
+    char text[64];
+
+    (void)snprintf(text, sizeof(text), ",\"%s\":%lld", name, value);
+    return ssoossh_json_append(a->body, sizeof(a->body), len, text);
+}
+
+/* Builds the create-request body, the same shape for /api/certs/pam and
+ * /api/certs/console. The field order is the server's struct's: the key
+ * and account first, then the context, then the options.
+ *
+ * Everything between username and requested_options is context -- what
+ * this process says about itself and where it is, so the approver can tell
+ * a request they caused from one they did not. Every one of those fields is
+ * self-reported by an unauthenticated caller and the server renders them as
+ * claims, so nothing here is verified before it is sent; it is read and
+ * passed on. Strings are omitted when empty, integers always go. */
 static bool build_body(attempt *a, const char *user, const char *public_key,
-                       const ssoossh_request_context *ctx, bool console)
+                       const ssoossh_request_context *ctx,
+                       const ssoossh_config *cfg)
 {
     char addrs[SSOOSSH_MAX_LOCAL_ADDRS][SSOOSSH_ADDR_LEN];
     size_t n_addrs = ssoossh_local_addresses(addrs, SSOOSSH_MAX_LOCAL_ADDRS);
+    ssoossh_host_info host;
     size_t len = 0;
     bool ok = true;
+
+    ssoossh_host_info_read(&host);
 
     ok = ok && ssoossh_json_append(a->body, sizeof(a->body), &len,
                                    "{\"public_key\":");
@@ -128,36 +180,39 @@ static bool build_body(attempt *a, const char *user, const char *public_key,
          ssoossh_json_append(a->body, sizeof(a->body), &len, ",\"username\":");
     ok = ok && ssoossh_json_append_string(a->body, sizeof(a->body), &len, user);
 
-    /* The context fields go with a console request and not with a PAM one.
-     * The Go module does not send them on /api/certs/pam, and the sudo flow
-     * is byte-for-byte wire parity with it until the differential harness
-     * says otherwise. A console certificate authorizes a whole session, so
-     * the approver needs to know which machine and which terminal is asking
-     * -- and the console endpoint is new here anyway, so there is no
-     * previous behaviour to match. */
-    if (console) {
-        static const struct {
-            const char *name;
-            size_t offset;
-        } fields[] = {
-            {",\"hostname\":", offsetof(ssoossh_request_context, hostname)},
-            {",\"pam_service\":", offsetof(ssoossh_request_context, service)},
-            {",\"tty\":", offsetof(ssoossh_request_context, tty)},
-            {",\"remote_host\":", offsetof(ssoossh_request_context, rhost)},
-        };
+    ok = ok && append_opt(a, &len, "hostname", ctx->hostname);
+    ok = ok && append_opt(a, &len, "pam_service", ctx->service);
+    ok = ok && append_opt(a, &len, "tty", ctx->tty);
+    ok = ok && append_opt(a, &len, "remote_host", ctx->rhost);
+    ok = ok && append_opt(a, &len, "requesting_user", ctx->ruser);
+    ok = ok && append_opt(a, &len, "process", host.process);
+    ok = ok && append_int(a, &len, "caller_uid", (long long)getuid());
+    ok = ok && append_int(a, &len, "caller_pid", (long long)getpid());
+    ok = ok && append_int(a, &len, "caller_ppid", (long long)getppid());
+    ok = ok && append_opt(a, &len, "machine_id", host.machine_id);
+    ok = ok && append_opt(a, &len, "os", host.os);
+    ok = ok && append_opt(a, &len, "client", "pam_ssoossh-c/" PAM_SSOOSSH_VERSION);
+    ok = ok && append_opt(a, &len, "mode", mode_name(cfg->mode));
+    ok = ok && append_opt(a, &len, "client_time", host.client_time);
 
-        for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
-            const char *value = (const char *)ctx + fields[i].offset;
+    /* Which CAs this host would accept a certificate from, so the approver
+     * can see a host still trusting a CA that was meant to be retired. At
+     * most eight: a trusted-ca-file with more than that is a rotation gone
+     * wrong, and the first eight say so. */
+    ok = ok && ssoossh_json_append(a->body, sizeof(a->body), &len,
+                                   ",\"trusted_ca_fingerprints\":[");
+    for (size_t i = 0; i < a->cas.count && i < 8; i++) {
+        char fp[SSOOSSH_FINGERPRINT_LEN];
 
-            if (value[0] == '\0') {
-                continue;
-            }
-            ok = ok && ssoossh_json_append(a->body, sizeof(a->body), &len,
-                                           fields[i].name);
-            ok = ok && ssoossh_json_append_string(a->body, sizeof(a->body),
-                                                  &len, value);
+        ssoossh_sshkey_fingerprint(a->cas.keys[i].blob, a->cas.keys[i].len,
+                                   fp);
+        if (i > 0) {
+            ok = ok && ssoossh_json_append(a->body, sizeof(a->body), &len, ",");
         }
+        ok = ok &&
+             ssoossh_json_append_string(a->body, sizeof(a->body), &len, fp);
     }
+    ok = ok && ssoossh_json_append(a->body, sizeof(a->body), &len, "]");
 
     ok = ok && ssoossh_json_append(a->body, sizeof(a->body), &len,
                                    ",\"requested_options\":{");
@@ -396,10 +451,7 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
         cfg->principals_map[0] != '\0' ? cfg->principals_map : "(unset)",
         ssoossh_duration_string(cfg->skew_tolerance, skew, sizeof(skew)),
         ssoossh_duration_string(cfg->timeout, timeout, sizeof(timeout)),
-        cfg->insecure_skip_verify ? "true" : "false",
-        cfg->mode == SSOOSSH_MODE_AUTO      ? "auto"
-        : cfg->mode == SSOOSSH_MODE_CONSOLE ? "console"
-                                            : "sudo");
+        cfg->insecure_skip_verify ? "true" : "false", mode_name(cfg->mode));
 
     if (cfg->insecure_skip_verify) {
         /* Loud, and at warning rather than debug. With this on, nothing the
@@ -479,7 +531,7 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
                        fp);
     }
 
-    if (!build_body(a, user, a->key_line, &ctx, console)) {
+    if (!build_body(a, user, a->key_line, &ctx, cfg)) {
         ssoossh_errf("the certificate request body could not be built");
         rc = PAM_ABORT;
         goto done;

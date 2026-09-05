@@ -100,6 +100,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(length))
         console = self.path.endswith("/console")
 
+        if ARGS.record:
+            # The create body as the module sent it, for a harness that
+            # asserts on the wire rather than on the outcome. Overwritten
+            # per request; a scenario that creates twice sees the last.
+            with open(ARGS.record, "w", encoding="utf-8") as f:
+                json.dump({"path": self.path, "body": body}, f)
+
         if ARGS.scenario == "bad-json":
             self.respond_raw(200, b"not json at all")
             return
@@ -273,6 +280,8 @@ def main():
     p.add_argument("--workdir", required=True,
                    help="directory holding the CA private keys to sign with")
     p.add_argument("--verbose", action="store_true")
+    p.add_argument("--record", default=None,
+                   help="write each create request's path and body here as JSON")
     ARGS = p.parse_args()
 
     if shutil.which("ssh-keygen") is None:

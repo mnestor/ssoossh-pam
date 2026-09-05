@@ -366,7 +366,21 @@ fi
 for s in "${scenarios[@]}"; do
     case "$s" in
     approved)
-        run approved approved 0 'successful authentication' 15s '' ;;
+        # The happy path, and then what went out on it: the stub records
+        # the create body, and context_check.py asserts the context fields
+        # are there, well-formed, and agree with what this harness knows
+        # about the host -- the service name it wrote, the CA it generated.
+        run approved approved 0 'successful authentication' 15s '' \
+            --record "$workdir/create.json"
+        printf '  %-18s ' "context-fields"
+        if out="$(python3 "$here/context_check.py" "$workdir/create.json" \
+                    "$service" "$workdir/ca_ecdsa384.pub" 2>&1)"; then
+            printf 'ok\n'
+        else
+            printf 'FAILED\n'
+            printf '%s\n' "$out" | sed 's/^/    /' >&2
+            failures=$((failures + 1))
+        fi ;;
     denied)
         run denied denied 0 'the request was denied' 15s '' ;;
     expired)

@@ -45,6 +45,7 @@ static const struct {
     {"checks", suite_checks},
     {"localaddrs", suite_localaddrs},
     {"console", suite_console},
+    {"hostinfo", suite_hostinfo},
 #ifndef __APPLE__
     {"qr", suite_qr},
 #endif

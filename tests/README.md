@@ -128,6 +128,7 @@ syslog line is what distinguishes them.
 | | |
 | --- | --- |
 | `approved` | the happy path, against a certificate signed a moment earlier |
+| `context-fields` | what went out with it: `tests/context_check.py` asserts on the create body the stub recorded — hostname, service, caller ids, OS, client, mode, clock, CA fingerprints |
 | `denied`, `expired`, `failed` | each terminal status, by name |
 | `enrolled` | a terminal status that carries no certificate a login can use |
 | `unknown` | an event name nobody listed — informational, so this ends at the timeout, matching the Go client |

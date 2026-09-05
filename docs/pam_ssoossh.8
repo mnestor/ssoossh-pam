@@ -411,16 +411,35 @@ shipped \(em and the line carries no field.
 The module reads
 .BR PAM_USER ,
 which names the account, and
-.BR PAM_SERVICE ", " PAM_TTY " and " PAM_RHOST ,
-which together with the hostname are sent to
+.BR PAM_SERVICE ", " PAM_TTY ", " PAM_RHOST " and " PAM_RUSER ,
+which are sent to
 .B ssoosshd
-as the request's context, so the approver can tell a request they caused
-from one they did not: which machine, through which service, at which
-terminal, from where. Every one of them is self\-reported by an
-unauthenticated caller and the server shows them as claims, not facts.
+as part of the request's context.
 .BR PAM_TTY " and " PAM_RHOST
 also decide the flow, as described under
 .BR MODES .
+.SH REQUEST CONTEXT
+Every request, in either flow, carries what this process can say about
+itself and where it is, so the approver can tell a request they caused from
+one they did not: the hostname; the PAM service, terminal, remote host and
+requesting user from the items above; the host process's command line
+(Linux and FreeBSD); the calling uid, pid and parent pid; the machine
+identifier
+.RI ( /etc/machine\-id
+on Linux, the host UUID elsewhere); the operating system, from
+.I /etc/os\-release
+and
+.BR uname (1);
+this module's name and version; the configured
+.BR mode ;
+the host's clock; and the SHA256 fingerprint of each key in
+.BR trusted\-ca\-file ,
+up to eight.
+.PP
+Every one of these is self\-reported by an unauthenticated caller. The
+module verifies none of them before sending, and the server shows them as
+claims, not facts; a field the host cannot supply is left out rather than
+guessed.
 Everything written to the terminal goes through the PAM conversation
 function the application supplied; the module never opens the tty itself.
 .SH NETWORK

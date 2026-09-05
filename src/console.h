@@ -32,6 +32,10 @@ typedef struct {
     char tty[128];
     char rhost[256];
     char hostname[256];
+    /* PAM_RUSER: the account that invoked the service, where the service
+     * sets it -- sudo does, sshd does not. Distinct from PAM_USER, which
+     * is the account being authenticated. */
+    char ruser[64];
 } ssoossh_request_context;
 
 /* Reads what libpam knows about this transaction. Every field is optional:
