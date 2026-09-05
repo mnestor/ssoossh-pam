@@ -131,56 +131,87 @@ materialise() {
     esac
 }
 
-# The identities, into a keychain of their own that the trap removes. The
-# partition list is what lets codesign and productsign use the keys
-# without a dialog nobody is there to click.
+# The identities, into a keychain of their own that the trap removes.
 sign_app=
 sign_inst=
+
+# What the keychain ended up holding, for a failure that has to be read out
+# of a log afterwards. An identity is a certificate *and* its private key,
+# so a certificate in the second listing that is not in the first says which
+# half is missing: the export left the key behind.
+dump_keychain() {
+    echo "  identities:" >&2
+    security find-identity "$keychain" >&2 || true
+    echo "  certificates:" >&2
+    security find-certificate -a "$keychain" 2>/dev/null |
+        sed -n 's/^ *"labl"<blob>=/    /p' >&2
+}
+
+# `security import` says "1 identity imported." for a certificate with its
+# private key and "1 certificate imported." for one without, and a
+# certificate on its own is no use here: it imports without complaint and
+# then signs nothing. That line is the whole diagnosis when the checks below
+# fail, so it is kept, labelled with the variable it came from and with the
+# size of what that variable decoded to -- an empty, truncated or
+# wrong-field secret shows itself there first.
+#
+# No -f pkcs12, deliberately: the flag is what suppresses that line. With it
+# a successful import prints nothing at all, which is why the log of the run
+# this was written for said only that both imports had happened. Without it
+# the format is detected from the file, and the summary comes back.
+import_p12() {
+    if out=$(security import "$2" -k "$keychain" \
+        -P "${QUILL_SIGN_PASSWORD:-}" \
+        -T /usr/bin/codesign -T /usr/bin/productsign \
+        -T /usr/bin/security 2>&1); then
+        echo "macos: $1: $(wc -c < "$2" | tr -d ' ') bytes;" \
+            "${out:-security import printed nothing}"
+    else
+        echo "macos: $1: $(wc -c < "$2" | tr -d ' ') bytes;" \
+            "security import failed: ${out:-no output}" >&2
+        exit 1
+    fi
+}
+
 if [ -n "${QUILL_SIGN_P12:-}" ]; then
     keychain=$work/sign.keychain-db
     kcpass=$(head -c 24 /dev/urandom | base64)
     security create-keychain -p "$kcpass" "$keychain"
     security set-keychain-settings "$keychain"
     security unlock-keychain -p "$kcpass" "$keychain"
-    # `security import` says "1 identity imported." for a certificate with
-    # its private key and "1 certificate imported." for one without, and a
-    # certificate on its own is no use here: it imports without complaint
-    # and then signs nothing. That line is the whole diagnosis when the
-    # check below fails, so it is not thrown away.
     materialise "$QUILL_SIGN_P12" "$work/sign.p12"
-    echo "macos: QUILL_SIGN_P12:"
-    security import "$work/sign.p12" -k "$keychain" -f pkcs12 \
-        -P "${QUILL_SIGN_PASSWORD:-}" \
-        -T /usr/bin/codesign -T /usr/bin/productsign -T /usr/bin/security
+    import_p12 QUILL_SIGN_P12 "$work/sign.p12"
     if [ -n "${QUILL_INSTALLER_P12:-}" ]; then
         materialise "$QUILL_INSTALLER_P12" "$work/installer.p12"
-        echo "macos: QUILL_INSTALLER_P12:"
-        security import "$work/installer.p12" -k "$keychain" -f pkcs12 \
-            -P "${QUILL_SIGN_PASSWORD:-}" \
-            -T /usr/bin/codesign -T /usr/bin/productsign -T /usr/bin/security
+        import_p12 QUILL_INSTALLER_P12 "$work/installer.p12"
     fi
-    security set-key-partition-list -S apple-tool:,apple: -s \
-        -k "$kcpass" "$keychain" >/dev/null
+
+    # What lets codesign and productsign use the keys without a dialog
+    # nobody is there to click. Not fatal on its own, because the way it
+    # fails is a symptom and not the disease: a keychain with no private key
+    # in it -- every P12 here holding a bare certificate -- fails this with
+    # "The specified item could not be found in the keychain", which says
+    # far less than the identity checks just below it do. Let those speak.
+    # If the keys are there and this still failed, codesign says so itself a
+    # few lines further on, and just as loudly.
+    if ! out=$(security set-key-partition-list -S apple-tool:,apple: -s \
+        -k "$kcpass" "$keychain" 2>&1); then
+        echo "macos: set-key-partition-list: ${out:-no output}" >&2
+    fi
+
     sign_app=$(security find-identity -v -p codesigning "$keychain" |
         sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)
     sign_inst=$(security find-identity -v "$keychain" |
         sed -n 's/.*"\(Developer ID Installer: [^"]*\)".*/\1/p' | head -1)
     if [ -z "$sign_app" ]; then
         echo "macos: QUILL_SIGN_P12 holds no valid Developer ID Application identity" >&2
-        security find-identity "$keychain" >&2
+        dump_keychain
         exit 1
     fi
     if [ -z "$sign_inst" ]; then
         echo "macos: no valid Developer ID Installer identity in QUILL_SIGN_P12 or QUILL_INSTALLER_P12;" \
             "Gatekeeper would refuse the package, so it is not built" >&2
-        security find-identity "$keychain" >&2
-        # An identity is a certificate *and* its private key. The
-        # certificates are listed as well because the Installer one
-        # appearing here and not above says which half is missing: the
-        # export left the key behind.
-        echo "  certificates in the keychain:" >&2
-        security find-certificate -a "$keychain" |
-            sed -n 's/^ *"labl"<blob>=/    /p' >&2
+        dump_keychain
         exit 1
     fi
 fi
