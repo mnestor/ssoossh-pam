@@ -25,6 +25,11 @@
  * done. Treat every line as unverified until macos-15 has run it.
  * ==========================================================================
  */
+/* Before <string.h>: Apple declares memset_s only when this is set, and a
+ * call to an undeclared function is an error under the flags this builds
+ * with. */
+#define __STDC_WANT_LIB_EXT1__ 1
+
 #include <CommonCrypto/CommonDigest.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
@@ -396,9 +401,22 @@ bool ssoossh_crypto_sha256(const uint8_t *in, size_t in_len, uint8_t out[32])
 
 void ssoossh_crypto_wipe(void *p, size_t n)
 {
-    /* memset_s is in the C11 Annex K subset macOS actually provides, and it
-     * is the one spelling the compiler may not elide. */
+#ifdef __STDC_LIB_EXT1__
+    /* memset_s is in the C11 Annex K subset macOS provides, and it is the
+     * one spelling the compiler may not elide. */
     (void)memset_s(p, n, 0, n);
+#else
+    /* The portable fallback, for a toolchain that turns out not to declare
+     * it after all: writes through a volatile pointer are observable
+     * behaviour and may not be optimised away. Kept rather than assumed
+     * unnecessary, because this file has never been compiled and a wipe
+     * that silently does nothing is the worst way to find that out. */
+    volatile unsigned char *q = p;
+
+    while (n-- > 0) {
+        *q++ = 0;
+    }
+#endif
 }
 
 const char *ssoossh_crypto_version(void)

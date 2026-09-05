@@ -296,3 +296,7 @@ FreeBSD and macOS are in `.github/workflows/cross-platform.yml` behind
 `workflow_dispatch`, and act cannot run either: there is no macOS runner to
 emulate, and the FreeBSD VM action needs nested virtualisation. They are
 deliberately not on the push path until the port is finished on Linux.
+
+Neither platform has ever been compiled. [`docs/porting.md`](../docs/porting.md)
+is the same sequence written out for a human with a machine: what to
+install, what to run in what order, and what is most likely to break first.

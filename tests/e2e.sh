@@ -51,32 +51,61 @@ done
 workdir="$(mktemp -d)"
 chmod 755 "$workdir"
 
-# Where the module's syslog output can be read back.
+# Where the module's syslog output can be read back, which is a different
+# question on each platform.
 #
-# In the devcontainer rsyslog owns /dev/log and the lines land in
-# /var/log/auth.log. In a bare CI job container there is no daemon at all,
-# the socket does not exist, and everything the module says goes nowhere --
-# which makes every assertion below unverifiable. Rather than install a
-# syslog daemon into three CI images, tests/logsink.py binds the socket and
-# appends what arrives to a file.
-logfile=/var/log/auth.log
+#   Linux    libc writes to /dev/log. In the devcontainer rsyslog owns it and
+#            files LOG_AUTHPRIV into /var/log/auth.log; a bare CI job
+#            container has no daemon at all, so tests/logsink.py binds the
+#            socket instead.
+#   FreeBSD  the socket is /var/run/log, and syslogd runs by default, filing
+#            LOG_AUTHPRIV into /var/log/auth.log per the stock syslog.conf.
+#            If it is not running, the sink binds /var/run/log the same way.
+#   macOS    there is no socket to bind: syslog(3) feeds the unified logging
+#            system. `log stream` is the way back out, and it plays the same
+#            role the sink does elsewhere.
+os="$(uname -s)"
+logfile=""
 sink_pid=""
-if [ ! -S /dev/log ]; then
+
+case "$os" in
+Darwin)
     logfile="$workdir/syslog.log"
     : > "$logfile"
-    python3 "$here/logsink.py" --out "$logfile" >"$workdir/logsink.log" 2>&1 &
+    log stream --style compact --predicate 'process == "pamtest"' \
+        > "$logfile" 2>/dev/null &
     sink_pid=$!
-    for _ in $(seq 1 50); do
-        [ -S /dev/log ] && break
-        sleep 0.1
-    done
-    if [ ! -S /dev/log ]; then
-        log "e2e: could not start a syslog sink"
-        cat "$workdir/logsink.log" >&2
-        exit 2
+    # log stream takes a moment to attach; nothing before that is captured.
+    sleep 2
+    log "e2e: reading the unified log through 'log stream'"
+    ;;
+*)
+    case "$os" in
+    FreeBSD) syslog_socket=/var/run/log ;;
+    *)       syslog_socket=/dev/log ;;
+    esac
+
+    if [ -S "$syslog_socket" ]; then
+        logfile=/var/log/auth.log
+    else
+        logfile="$workdir/syslog.log"
+        : > "$logfile"
+        python3 "$here/logsink.py" --socket "$syslog_socket" --out "$logfile" \
+            >"$workdir/logsink.log" 2>&1 &
+        sink_pid=$!
+        for _ in $(seq 1 50); do
+            [ -S "$syslog_socket" ] && break
+            sleep 0.1
+        done
+        if [ ! -S "$syslog_socket" ]; then
+            log "e2e: could not start a syslog sink on $syslog_socket"
+            cat "$workdir/logsink.log" >&2
+            exit 2
+        fi
+        log "e2e: no syslog daemon; reading from $logfile"
     fi
-    log "e2e: no syslog daemon; reading from $logfile"
-fi
+    ;;
+esac
 
 # The CA private halves are generated per run and thrown away. Committing
 # them would mean committing a signing key, even a worthless one.
@@ -84,7 +113,34 @@ ssh-keygen -q -N '' -t ecdsa -b 384 -f "$workdir/ca_ecdsa384" -C e2e-ca
 ssh-keygen -q -N '' -t ecdsa -b 384 -f "$workdir/ca_untrusted" -C e2e-untrusted
 chmod 644 "$workdir"/*.pub
 
-make -C "$repo" --no-print-directory install >/dev/null
+# How the pam.d line names the module.
+#
+# Normally it is installed into the platform's module directory and named
+# bare. macOS has no such directory this may write to -- /usr/lib/pam is
+# protected by System Integrity Protection -- so the Makefile reports none,
+# and a pam.d entry takes an absolute path to the build directory instead.
+# That form is supported by every PAM implementation here and is the
+# documented way to test on macOS.
+module_file="$(make -C "$repo" --no-print-directory print-MODULE)"
+securitydir="$(make -C "$repo" --no-print-directory print-SECURITYDIR)"
+
+if [ -n "$securitydir" ]; then
+    make -C "$repo" --no-print-directory install >/dev/null
+    module_ref="pam_ssoossh.so"
+else
+    module_ref="$repo/$module_file"
+    log "e2e: no module directory on this platform; loading $module_ref by path"
+fi
+
+# Invoked directly rather than through `make e2e`, which builds these. A
+# missing binary otherwise surfaces as exit 127 inside a scenario, which
+# reads like a module failure.
+for f in "$repo/$module_file" "$repo/tests/pamtest"; do
+    [ -e "$f" ] || {
+        log "e2e: $f is missing -- run 'make && make tests/pamtest' first"
+        exit 2
+    }
+done
 
 # Alpine's linux-pam package ships no /etc/pam.d at all, so the directory
 # has to exist before anything can be written into it.
@@ -97,7 +153,7 @@ write_pamd() {
     local timeout="$1" extra="$2"
 
     cat > "/etc/pam.d/$service" <<EOF
-auth    sufficient  pam_ssoossh.so server=http://127.0.0.1:$port \\
+auth    sufficient  $module_ref server=http://127.0.0.1:$port \\
                     trusted-ca-file=$workdir/ca_ecdsa384.pub \\
                     timeout=$timeout skew-tolerance=2s debug $extra
 auth    required    pam_permit.so
@@ -239,7 +295,7 @@ run_cancel() {
     : > "$logfile" 2>/dev/null || true
     next_port
     cat > "/etc/pam.d/$service" <<EOF
-auth    $flag  pam_ssoossh.so server=http://127.0.0.1:$port \\
+auth    $flag  $module_ref server=http://127.0.0.1:$port \\
                     trusted-ca-file=$workdir/ca_ecdsa384.pub \\
                     timeout=60s debug
 auth    required    pam_permit.so
@@ -339,8 +395,10 @@ for s in "${scenarios[@]}"; do
         # this is a root process's tty.
         run escape escape 0 'not valid in a URL' 15s ''
         printf '  %-18s ' "escape-tty"
-        if printf '%s' "$LAST_OUT" |
-           LC_ALL=C grep -qP '[\x00-\x08\x0b-\x1f\x7f]'; then
+        # A POSIX character class, not grep -P: BSD grep has no PCRE, and
+        # this suite has to run on FreeBSD and macOS. grep works a line at a
+        # time, so the newlines between them are never candidates.
+        if printf '%s' "$LAST_OUT" | LC_ALL=C grep -q '[[:cntrl:]]'; then
             printf 'FAILED\n'
             log "    a control byte reached the terminal:"
             printf '%s' "$LAST_OUT" | cat -v | tail -5 >&2

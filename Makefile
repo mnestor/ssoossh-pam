@@ -26,15 +26,34 @@ ARCH   := $(shell uname -m)
 #
 # Nothing matches on macOS, which is deliberate -- /usr/lib/pam is protected
 # by System Integrity Protection and a pam.d entry there takes an absolute
-# path to the build directory instead. See tests/README.md.
-SECURITYDIR ?= $(firstword $(wildcard \
-    /lib/$(ARCH)-linux-gnu/security \
-    /usr/lib/$(ARCH)-linux-gnu/security \
-    /lib64/security \
-    /usr/lib64/security \
-    /lib/security \
-    /usr/lib/security \
-    /usr/local/lib/security))
+# path to the build directory instead. tests/e2e.sh detects the empty answer
+# and uses that form. See docs/porting.md.
+ifeq ($(UNAME),Darwin)
+  # Deliberately empty. /usr/lib/pam is protected by System Integrity
+  # Protection, so there is nowhere to install; a pam.d entry takes an
+  # absolute path to the build directory instead, and tests/e2e.sh uses that
+  # form when this is blank.
+  #
+  # Stated rather than searched for, so that a stray /usr/local/lib/security
+  # left by some other package cannot become an install target that nothing
+  # ever loads from.
+  SECURITYDIR ?=
+else ifeq ($(UNAME),FreeBSD)
+  # FreeBSD is the other exception: OpenPAM has no security/ subdirectory at
+  # all. Base modules sit directly in /usr/lib and ports install to
+  # /usr/local/lib, which is where a third-party module belongs. Confirm
+  # with `ls /usr/lib/pam_unix.so` on the host.
+  SECURITYDIR ?= /usr/local/lib
+else
+  SECURITYDIR ?= $(firstword $(wildcard \
+      /lib/$(ARCH)-linux-gnu/security \
+      /usr/lib/$(ARCH)-linux-gnu/security \
+      /lib64/security \
+      /usr/lib64/security \
+      /lib/security \
+      /usr/lib/security \
+      /usr/local/lib/security))
+endif
 
 # Version is stamped in at build time rather than tracked in a header, so a
 # working tree and a release build report differently on purpose. Logged at
@@ -262,7 +281,7 @@ check-size: $(MODULE)
 # and every scenario fails with "ASan runtime does not come first" -- which
 # looks like a module bug and is not one.
 e2e:
-	@if nm -D $(MODULE) 2>/dev/null | grep -q __asan; then \
+	@if nm $(MODULE) 2>/dev/null | grep -q asan; then \
 	  echo "e2e: the built module is sanitised; rebuilding it plain"; \
 	  $(MAKE) --no-print-directory clean; \
 	fi
@@ -422,6 +441,14 @@ install: $(MODULE)
 clean:
 	rm -rf $(BUILD) pam_ssoossh.so pam_ssoossh.bundle tests/pamtest \
 	       tests/loadtest tests/unit_tests
+
+# Machine-readable answers for the test harnesses, which have to know what
+# this platform calls the module and where it goes:
+#
+#   make print-MODULE        pam_ssoossh.so, or .bundle on macOS
+#   make print-SECURITYDIR   empty where there is nowhere to install
+print-%:
+	@echo "$($*)"
 
 help:
 	@echo "make            build $(MODULE) for $(UNAME)"

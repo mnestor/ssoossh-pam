@@ -56,10 +56,12 @@ if [ -z "$go_module" ] || [ ! -f "$go_module" ]; then
     exit 2
 fi
 
-securitydir="$(make -C "$repo" --no-print-directory help |
-               sed -n 's/^make install    install into //p')"
-if [ ! -d "$securitydir" ]; then
-    log "differential: could not find the PAM module directory"
+securitydir="$(make -C "$repo" --no-print-directory print-SECURITYDIR)"
+if [ -z "$securitydir" ] || [ ! -d "$securitydir" ]; then
+    log "differential: no PAM module directory on this platform"
+    log "differential: Linux only anyway -- the Go module hardcodes"
+    log "              Linux-PAM's numeric return codes, so it is not a"
+    log "              correct reference to compare against elsewhere"
     exit 2
 fi
 
@@ -78,11 +80,18 @@ if [ ! -S /dev/log ]; then
     for _ in $(seq 1 50); do [ -S /dev/log ] && break; sleep 0.1; done
 fi
 
+# Unique ports per comparison, for the same reason e2e.sh uses them: reusing
+# one means depending on the previous stub's listener being gone, and under
+# load it is not.
+next_port() { port=$((port + 1)); }
+
 make -C "$repo" --no-print-directory install >/dev/null
 install -m 0644 "$go_module" "$securitydir/pam_ssoossh_go.so"
 
-log "differential: C module $(stat -c%s "$securitydir/pam_ssoossh.so") bytes," \
-    "Go module $(stat -c%s "$securitydir/pam_ssoossh_go.so") bytes"
+# wc -c rather than stat: BSD stat spells the same question -f%z, and this
+# script is read on machines that have one or the other.
+log "differential: C module $(wc -c < "$securitydir/pam_ssoossh.so") bytes," \
+    "Go module $(wc -c < "$securitydir/pam_ssoossh_go.so") bytes"
 
 start_stub() {
     python3 "$here/stubd.py" --port "$port" --workdir "$workdir" "$@" \
@@ -136,9 +145,11 @@ compare() {
     local c_code go_code
 
     printf '  %-18s ' "$label"
+    next_port
     c_code="$(one pam_ssoossh.so "$timeout" "$@")"
     local c_log
     c_log="$(grep -a pam_ssoossh "$logfile" 2>/dev/null | tail -3 || true)"
+    next_port
     go_code="$(one pam_ssoossh_go.so "$timeout" "$@")"
     local go_log
     go_log="$(grep -a pam_ssoossh "$logfile" 2>/dev/null | tail -3 || true)"

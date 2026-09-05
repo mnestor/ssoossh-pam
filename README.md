@@ -150,7 +150,7 @@ Build dependencies are libpam, libcrypto and libcurl:
 | Debian, Ubuntu | `build-essential pkg-config libssl-dev libcurl4-openssl-dev libpam0g-dev` |
 | RHEL 8+, AlmaLinux, Rocky | `gcc make pkgconf-pkg-config openssl-devel libcurl-devel pam-devel` |
 | Alpine | `build-base pkgconf openssl-dev curl-dev linux-pam-dev` |
-| FreeBSD | `gmake pkgconf` (libpam, OpenSSL and libcurl are in base) |
+| FreeBSD | `gmake pkgconf curl` (libpam and OpenSSL are in base; libcurl is not — base has `fetch`) |
 | macOS 15+ | Xcode command line tools only — no OpenSSL, no Homebrew |
 
 ## Supported platforms
@@ -272,6 +272,11 @@ whose Makefile branches and crypto backend exist but have never been
 compiled, let alone executed; and console mode against the real server
 endpoints, which exist in the monorepo but have only been driven from a
 stub written against them.
+
+[`docs/porting.md`](docs/porting.md) is the sequence for building and
+testing on those two by hand — what to install, what to run, what is most
+likely to break first, and why an Objective-C backend would not close the
+Ed25519 gap on macOS.
 
 ## Testing
 

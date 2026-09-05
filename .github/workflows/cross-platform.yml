@@ -3,19 +3,33 @@ name: Cross-platform
 # Manual only, on purpose.
 #
 # FreeBSD and macOS are real targets -- their Makefile branches, the ld64
-# symbol list, and the Sequoia SDK check are all written -- but neither has
-# ever been built, and neither can be built on the Linux machines this is
-# developed on. Running them on every push would produce failures nobody is
-# ready to act on, on platforms nobody is working on yet.
+# symbol list, and src/crypto_darwin.c are all written -- but **neither has
+# ever been compiled**. Nothing in this file has been observed to work; it is
+# correct by inspection and no further than that. The first run will
+# probably fail, and finding out how is what it is for.
 #
-# The sequencing is deliberate: get the module finished and correct on Linux
-# first, where it can be iterated locally through `make cross`, then turn
-# these on and deal with whatever they say.
+# Run it from the Actions tab, or:
 #
-# Enable them in ci.yml, rather than leaving this file, once the port is far
-# enough along that a FreeBSD or macOS failure is worth interrupting for.
+#   gh workflow run cross-platform.yml
+#   gh workflow run cross-platform.yml -f job=macos
+#
+# The steps are deliberately fine-grained rather than one `make` call, so a
+# first run says *which* thing broke instead of failing at the top -- and the
+# first step on each platform reports what the SDK and the package set
+# actually contain, because half of porting is finding out that an
+# assumption in the Makefile was wrong.
+#
+# Move these into ci.yml once they pass -- see docs/porting.md, which is the
+# same sequence written out for a human doing it by hand.
 on:
   workflow_dispatch:
+    inputs:
+      job:
+        description: Which platform to run (both, freebsd, macos)
+        required: false
+        default: both
+        type: choice
+        options: [both, freebsd, macos]
 
 permissions:
   contents: read
@@ -24,39 +38,139 @@ jobs:
   # No GitHub-hosted FreeBSD image exists, so it runs in a VM on the Linux
   # runner. Slower than native and the images lag releases, but it is the
   # option with no machine to own.
+  #
+  # FreeBSD is the OpenPAM target that actually ships, so it matters more
+  # than macOS: it is the platform where a bug here reaches a real host.
   freebsd:
     name: freebsd
+    if: ${{ inputs.job == 'both' || inputs.job == 'freebsd' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: cross-platform-actions/action@v0.27.0
         with:
           operating_system: freebsd
           version: '14.2'
+          # One script rather than several steps: each `run` is a fresh VM
+          # session, so state does not carry between them.
           run: |
-            sudo pkg install -y gmake pkgconf
+            set -x
+
+            # libcurl is NOT in FreeBSD base -- base has fetch(1), not curl.
+            # libpam and OpenSSL are. bash and python3 are for the e2e
+            # harness; ssh-keygen is in base.
+            sudo pkg install -y gmake pkgconf curl bash python3
+
+            uname -a
+            cc --version | head -1
+            pkg-config --modversion libcrypto || true
+            pkg-config --modversion libcurl || true
+
+            # OpenPAM, not Linux-PAM. If this header is missing the whole
+            # platform assumption is wrong and everything below is noise.
+            ls -l /usr/include/security/pam_appl.h
+            ls -l /usr/include/security/openpam.h
+
+            # Where OpenPAM actually looks. FreeBSD has no security/
+            # subdirectory: base modules sit in /usr/lib and ports install
+            # to /usr/local/lib, which is what the Makefile assumes.
+            ls -l /usr/lib/pam_unix.so || true
+            gmake print-SECURITYDIR
+
             gmake
+            gmake check-symbols
             gmake test
+            gmake check-stdio
+            gmake check-size
+            gmake san
+
+            # The whole flow, through a real PAM stack. syslogd runs by
+            # default here and files LOG_AUTHPRIV into /var/log/auth.log.
+            gmake
+            gmake tests/pamtest
+            sudo gmake e2e
 
   # Developer and CI target only: it ships no artifact and console mode is
   # not compiled into it. It exists to keep the OpenPAM paths, the ld64
   # symbol list, and the Security.framework backend under test.
+  #
+  # src/crypto_darwin.c is the file this job exists for. It has never been
+  # compiled, so expect the first run to fail in it.
   macos:
     name: macos (sequoia, arm64)
+    if: ${{ inputs.job == 'both' || inputs.job == 'macos' }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Confirm the SDK has curl headers but no OpenSSL
+
+      - name: What this SDK actually has
         run: |
+          sw_vers
+          uname -m
+          cc --version | head -1
           sdk=$(xcrun --show-sdk-path)
           echo "SDK: $sdk"
-          test -f "$sdk/usr/include/curl/curl.h" \
-            && echo "curl headers: present" \
-            || echo "curl headers: ABSENT -- P4 needs another route"
-          test -d "$sdk/usr/include/openssl" \
-            && echo "openssl headers: present -- the macOS crypto decision needs revisiting" \
-            || echo "openssl headers: absent, as expected"
+
+          # libcurl is a system library here, headers and stub included --
+          # if that stops being true, the HTTP half needs another route.
+          if [ -f "$sdk/usr/include/curl/curl.h" ]; then
+            echo "curl headers: present"
+          else
+            echo "curl headers: ABSENT"
+            exit 1
+          fi
+          ls "$sdk"/usr/lib/libcurl.tbd || true
+
+          # No OpenSSL, which is why there is a Security.framework backend
+          # at all. If Apple ever ships headers, the decision is worth
+          # revisiting rather than assuming.
+          if [ -d "$sdk/usr/include/openssl" ]; then
+            echo "openssl headers: PRESENT -- the macOS crypto decision needs revisiting"
+          else
+            echo "openssl headers: absent, as expected"
+          fi
+
+          # OpenPAM, and the module directory that SIP protects.
+          ls -l "$sdk/usr/include/security/pam_appl.h"
+          ls -l "$sdk/usr/include/security/openpam.h"
+          find /usr/lib/pam -maxdepth 1 -name 'pam_*' | head
+
+          # Whether SecKey has gained Ed25519 since this was written. If it
+          # has, the capability gap can close without vendoring anything --
+          # see docs/porting.md.
+          echo "--- SecKey key types in this SDK ---"
+          grep -rho 'kSecAttrKeyType[A-Za-z0-9]*' \
+            "$sdk/System/Library/Frameworks/Security.framework/Headers/" \
+            | sort -u || true
+
       - name: Build
         run: make
-      - name: Symbol and load gates
+
+      - name: Exported symbols
+        run: make check-symbols
+
+      - name: Symbol, load and unit gates
         run: make test
+
+      - name: No stdio in the module
+        run: make check-stdio
+
+      - name: Size gate
+        run: make check-size
+
+      - name: Sanitiser build and unit suite
+        run: make san
+
+      # /usr/lib/pam is protected by System Integrity Protection, so nothing
+      # installs there. The Makefile reports no module directory on this
+      # platform and tests/e2e.sh loads the bundle by absolute path instead,
+      # which every PAM implementation here supports.
+      #
+      # The log is read through `log stream`: syslog(3) feeds the unified
+      # logging system on macOS and there is no socket to bind.
+      - name: End to end against a stub server
+        run: |
+          make
+          make tests/pamtest
+          sudo make e2e
