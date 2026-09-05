@@ -1,0 +1,174 @@
+name: Apple drift
+
+# Does Apple still export the Ed25519 SPI the macOS backend depends on, and
+# does it still behave? Asked of every macOS and every Xcode SDK GitHub
+# hosts -- betas and previews included -- on a schedule, so the answer
+# changes here before it changes on a host.
+#
+# Why this exists: src/crypto_darwin.c verifies ssh-ed25519 through
+# kSecAttrKeyTypeEd25519 and kSecKeyAlgorithmEdDSASignatureMessageCurve25519SHA512,
+# which Security.framework has exported since macOS 14 without ever
+# declaring in a public header. The backend resolves them with dlsym and
+# self-tests them, so a host where they vanish degrades to "ssh-ed25519
+# unsupported" rather than breaking. Degrading across a fleet is still
+# something to know about a beta cycle early, not a point release late.
+# docs/porting.md has the full story.
+#
+# Three views, each a job:
+#
+#   sdk       every Xcode on the runner image, so the SDK for the *next*
+#             macOS is checked while it is still a beta. Runs on the newest
+#             images GitHub offers, which is where the beta Xcodes are.
+#   runtime   the module built and its Ed25519 suite run through the
+#             framework of the macOS the job is on.
+#   source    Apple's open-source drop of Security.framework, checked for
+#             the declarations and the export list. Lags releases, but it
+#             is the one view that says *why* something changed.
+#
+# A fourth, for an Apple developer account: a self-hosted Mac enrolled in
+# the developer beta programme runs the runtime check against the beta OS
+# itself, which no hosted image does. Gated on a repository variable so a
+# repo without such a Mac does not queue forever -- see docs/porting.md,
+# "Watching Apple" for the setup.
+#
+# Failure notifications for scheduled runs go to the author of the last
+# commit that touched this file. Keep that someone who reads them.
+on:
+  schedule:
+    # Mondays, 06:00 UTC. Apple's betas land on their own cadence; weekly
+    # is early enough for a cycle that runs months.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sdk:
+    name: sdk (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # The two newest stable images and the preview one. GitHub's labels
+        # for these move with each Xcode cycle: when a row starts failing
+        # with "no runner matched", update it from
+        # https://github.com/actions/runner-images#available-images
+        runner: [macos-15, macos-26, xcode-27]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Every Xcode SDK on this image, betas included
+        run: |
+          sw_vers
+          rc=0
+          for app in /Applications/Xcode*.app; do
+            [ -d "$app" ] || continue
+            echo "=================================================="
+            echo "$app"
+            if ! sdk=$(DEVELOPER_DIR="$app" xcrun --show-sdk-path 2>/dev/null); then
+              echo "  no macOS SDK reachable through this Xcode; skipping"
+              continue
+            fi
+            tests/apple-spi-check.sh --sdk "$sdk" || rc=$?
+          done
+          exit $rc
+
+  runtime:
+    name: runtime (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-26, xcode-27]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: make
+
+      - name: Ed25519 through the framework this macOS runs
+        run: make check-apple-spi
+
+  # Apple's source drop, so a change has a diff to read. The newest tag of
+  # the Security project is found from the distribution manifest, which
+  # maps a macOS release to its component versions.
+  source:
+    name: source (apple-oss-distributions)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Newest Security.framework source Apple has published
+        run: |
+          set -eu
+          # git rather than the GitHub API: no token, no rate limit, no
+          # pagination, and it runs the same under nektos/act.
+          tag=$(git ls-remote --tags --refs \
+                  https://github.com/apple-oss-distributions/Security \
+                  'refs/tags/Security-*' \
+                | sed 's|.*refs/tags/||' | sort -t- -k2,2V | tail -1)
+          if [ -z "$tag" ]; then
+            echo "could not list Apple's Security tags"
+            exit 1
+          fi
+          echo "newest tag: $tag"
+          base="https://raw.githubusercontent.com/apple-oss-distributions/Security/$tag"
+          rc=0
+          fetch() { curl -fsSL "$base/$1" -o "$(basename "$1")"; }
+          fetch keychain/headers/SecItemPriv.h
+          fetch keychain/headers/SecKeyPriv.h
+          fetch OSX/sec/Security/SecExports.exp-in
+          for want in 'SecItemPriv.h kSecAttrKeyTypeEd25519' \
+                      'SecKeyPriv.h kSecKeyAlgorithmEdDSASignatureMessageCurve25519SHA512' \
+                      'SecExports.exp-in _kSecAttrKeyTypeEd25519' \
+                      'SecExports.exp-in _kSecKeyAlgorithmEdDSASignatureMessageCurve25519SHA512'; do
+            # shellcheck disable=SC2086  # the split is the point
+            set -- $want
+            if grep -qw -- "$2" "$1"; then
+              echo "present: $2 in $1"
+            else
+              echo "MISSING: $2 in $1"
+              rc=1
+            fi
+          done
+          # The availability annotation, so a deprecation shows up as a
+          # diff in the log rather than as a surprise.
+          grep -n -A1 'kSecAttrKeyTypeEd25519' SecItemPriv.h || true
+          grep -n -A1 'kSecKeyAlgorithmEdDSASignatureMessageCurve25519SHA512' SecKeyPriv.h || true
+          exit $rc
+
+  # A Mac of your own, enrolled in the developer beta. Set the repository
+  # variable SSOOSSH_APPLE_BETA_RUNNER to "true" once a self-hosted runner
+  # with the labels below exists; until then this job is skipped rather
+  # than queued.
+  beta-runtime:
+    name: runtime (developer beta, self-hosted)
+    if: ${{ vars.SSOOSSH_APPLE_BETA_RUNNER == 'true' }}
+    runs-on: [self-hosted, macOS, apple-beta]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: What this Mac is running
+        run: |
+          sw_vers
+          xcodebuild -version 2>/dev/null || xcrun --show-sdk-version
+
+      - name: Every Xcode SDK on this Mac
+        run: |
+          rc=0
+          for app in /Applications/Xcode*.app; do
+            [ -d "$app" ] || continue
+            sdk=$(DEVELOPER_DIR="$app" xcrun --show-sdk-path 2>/dev/null) || continue
+            echo "== $app"
+            tests/apple-spi-check.sh --sdk "$sdk" || rc=$?
+          done
+          exit $rc
+
+      - name: Build
+        run: make
+
+      - name: Ed25519 through the beta framework
+        run: make check-apple-spi

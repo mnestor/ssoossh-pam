@@ -1,0 +1,29 @@
+# pam_ssoossh for sudo(8): approve in a browser instead of typing a password.
+#
+# Add the `auth sufficient pam_ssoossh.so` line to /etc/pam.d/sudo ABOVE the
+# line that pulls in password authentication. What that line looks like
+# depends on the distribution; the ssoossh line is the same everywhere.
+#
+#   Debian, Ubuntu           @include common-auth
+#   RHEL, Alma, Rocky        auth include system-auth      (authselect owns
+#                            /etc/pam.d/system-auth; edit /etc/pam.d/sudo)
+#   Alpine                   auth include base-auth
+#
+# `sufficient`: an approval ends the stack; a denial, a timeout, Ctrl-C or an
+# unreachable server falls through to the password prompt. That is the
+# intended posture -- ssoossh is an additional way in, not a gate that can
+# lock an operator out. Do not use `required` or `requisite` here.
+#
+# Test from a second root shell that is already open, not from this one.
+
+auth    sufficient  pam_ssoossh.so server=https://ssoossh.example.com \
+                    trusted-ca-file=/etc/ssoossh/ca.pub \
+                    principals-map=/etc/ssoossh/principals.yaml \
+                    skew-tolerance=2s timeout=60s
+
+# The rest of the file stays as your distribution shipped it, for example on
+# Debian:
+#
+# @include common-auth
+# @include common-account
+# @include common-session-noninteractive

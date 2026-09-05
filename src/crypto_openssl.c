@@ -13,16 +13,82 @@
 #    error "pam_ssoossh requires OpenSSL 1.1.1 or newer (RHEL 8 baseline)"
 #endif
 
+#include <pthread.h>
+#include <stdio.h>
 #include <string.h>
 
 #include <openssl/crypto.h>
+#include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 #include <openssl/x509.h>
 
 #include "crypto.h"
 #include "der.h"
+#include "log.h"
 #include "sshwire.h"
+
+/* ------------------------------------------------------------------------
+ * FIPS, and what the host's OpenSSL will actually verify.
+ *
+ * A host in FIPS mode -- RHEL with fips=1, or an OpenSSL configured to use
+ * only its FIPS provider -- decides for itself which algorithms exist.
+ * Which ones is a property of that host's OpenSSL, not of this module:
+ * RHEL 8's 1.1.1 refuses Ed25519 in FIPS mode, RHEL 9's 3.5 allows it,
+ * and both are right. So the module hardcodes nothing. The per-attempt key
+ * is P-384, approved everywhere; RSA and ECDSA CAs are verified through
+ * the same EVP calls whether FIPS is on or not, and a refusal is reported
+ * with OpenSSL's own reason; and Ed25519, the one algorithm a FIPS
+ * configuration commonly lacks, is probed once with a known answer before
+ * the module claims to support it, exactly as the macOS backend probes its
+ * SPI. What FIPS mode changes is therefore visible in two places: the
+ * version line every authentication logs, and a warning naming FIPS when
+ * an ssh-ed25519 CA has to be skipped because of it.
+ * ------------------------------------------------------------------------ */
+
+/* The kernel's switch, where there is one. Linux only; FreeBSD has no such
+ * flag and its OpenSSL is asked directly below. */
+static bool kernel_fips(void)
+{
+    FILE *f = fopen("/proc/sys/crypto/fips_enabled", "r");
+    int c;
+
+    if (f == NULL) {
+        return false;
+    }
+    c = fgetc(f);
+    (void)fclose(f);
+    return c == '1';
+}
+
+/* The library's own view: the default property query selecting only FIPS
+ * implementations on 3.x, or the global mode flag on 1.1.1, which the
+ * distributions that build 1.1.1 with a FIPS module still honour. */
+static bool library_fips(void)
+{
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    return EVP_default_properties_is_fips_enabled(NULL) == 1;
+#else
+    return FIPS_mode() != 0;
+#endif
+}
+
+const char *ssoossh_crypto_fips_state(void)
+{
+    return (kernel_fips() || library_fips()) ? "on" : "off";
+}
+
+/* OpenSSL's reason for the last failure, for a log line, and the queue
+ * cleared: it is thread-local state in a process -- sudo, sshd -- that
+ * this module does not own. */
+static const char *openssl_reason(void)
+{
+    unsigned long e = ERR_peek_last_error();
+    const char *reason = e != 0 ? ERR_reason_error_string(e) : NULL;
+
+    ERR_clear_error();
+    return reason != NULL ? reason : "no OpenSSL error recorded";
+}
 
 /* Public keys reach OpenSSL as a DER SubjectPublicKeyInfo through
  * d2i_PUBKEY, rather than being assembled from raw components. See der.h
@@ -198,10 +264,73 @@ static bool spki_from_ssh_key(const uint8_t *blob, size_t blob_len,
     return false;
 }
 
+static ssoossh_verify_result verify_spki(const uint8_t *spki, size_t spki_len,
+                                         const EVP_MD *md, const uint8_t *msg,
+                                         size_t msg_len, const uint8_t *sig,
+                                         size_t sig_len, const char **why);
+
+/* Ed25519, probed. RFC 8032 section 7.1 test 3 must verify and a copy with
+ * one signature byte flipped must not; anything else -- including the
+ * "unsupported" or "disallowed" OpenSSL raises when its FIPS provider has
+ * no EdDSA -- means this host cannot verify ssh-ed25519 and says so once. */
+static pthread_once_t ed25519_once = PTHREAD_ONCE_INIT;
+static bool ed25519_ok;
+
+static void ed25519_init(void)
+{
+    static const uint8_t pk[32] = {
+        0xfc, 0x51, 0xcd, 0x8e, 0x62, 0x18, 0xa1, 0xa3, 0x8d, 0xa4, 0x7e,
+        0xd0, 0x02, 0x30, 0xf0, 0x58, 0x08, 0x16, 0xed, 0x13, 0xba, 0x33,
+        0x03, 0xac, 0x5d, 0xeb, 0x91, 0x15, 0x48, 0x90, 0x80, 0x25};
+    static const uint8_t msg[2] = {0xaf, 0x82};
+    static const uint8_t sig[64] = {
+        0x62, 0x91, 0xd6, 0x57, 0xde, 0xec, 0x24, 0x02, 0x48, 0x27, 0xe6,
+        0x9c, 0x3a, 0xbe, 0x01, 0xa3, 0x0c, 0xe5, 0x48, 0xa2, 0x84, 0x74,
+        0x3a, 0x44, 0x5e, 0x36, 0x80, 0xd7, 0xdb, 0x5a, 0xc3, 0xac, 0x18,
+        0xff, 0x9b, 0x53, 0x8d, 0x16, 0xf2, 0x90, 0xae, 0x67, 0xf7, 0x60,
+        0x98, 0x4d, 0xc6, 0x59, 0x4a, 0x7c, 0x15, 0xe9, 0x71, 0x6e, 0xd2,
+        0x8d, 0xc0, 0x27, 0xbe, 0xce, 0xea, 0x1e, 0xc4, 0x0a};
+    uint8_t spki[64], flipped[64];
+    size_t spki_len = 0;
+    const char *why = "unknown";
+    const char *fips = ssoossh_crypto_fips_state();
+
+    if (!ssoossh_der_spki_ed25519(pk, sizeof(pk), spki, sizeof(spki),
+                                  &spki_len)) {
+        why = "could not encode the probe key";
+    } else if (verify_spki(spki, spki_len, NULL, msg, sizeof(msg), sig,
+                           sizeof(sig), &why) != SSOOSSH_VERIFY_OK) {
+        /* why is set. */
+    } else {
+        memcpy(flipped, sig, sizeof(flipped));
+        flipped[10] ^= 0x01;
+        if (verify_spki(spki, spki_len, NULL, msg, sizeof(msg), flipped,
+                        sizeof(flipped), &why) != SSOOSSH_VERIFY_BAD) {
+            why = "a corrupted signature was not refused";
+        } else {
+            ed25519_ok = true;
+            ssoossh_debugf("Ed25519: %s verified the known answer (fips: %s)",
+                           OpenSSL_version(OPENSSL_VERSION), fips);
+            return;
+        }
+    }
+    ssoossh_warnf("Ed25519: %s cannot verify it here (%s; fips: %s); "
+                  "ssh-ed25519 CAs cannot be used on this host",
+                  OpenSSL_version(OPENSSL_VERSION), why, fips);
+}
+
+static bool ed25519_usable(void)
+{
+    (void)pthread_once(&ed25519_once, ed25519_init);
+    return ed25519_ok;
+}
+
 bool ssoossh_crypto_supports_key(const char *key_algo)
 {
-    return strcmp(key_algo, "ssh-ed25519") == 0 ||
-           strcmp(key_algo, "ssh-rsa") == 0 ||
+    if (strcmp(key_algo, "ssh-ed25519") == 0) {
+        return ed25519_usable();
+    }
+    return strcmp(key_algo, "ssh-rsa") == 0 ||
            strcmp(key_algo, "ecdsa-sha2-nistp256") == 0 ||
            strcmp(key_algo, "ecdsa-sha2-nistp384") == 0 ||
            strcmp(key_algo, "ecdsa-sha2-nistp521") == 0;
@@ -221,6 +350,9 @@ static bool sig_algo_info(const char *sig_algo, const char **key_type,
                           const EVP_MD **md)
 {
     if (strcmp(sig_algo, "ssh-ed25519") == 0) {
+        if (!ed25519_usable()) {
+            return false;
+        }
         *key_type = "ssh-ed25519";
         *md = NULL;
         return true;
@@ -270,6 +402,61 @@ static bool ecdsa_sig_to_der(const uint8_t *sig, size_t sig_len, uint8_t *out,
     return ssoossh_der_ecdsa_sig(rr, r_len, ss, s_len, out, out_cap, out_len);
 }
 
+/* The EVP half: a SubjectPublicKeyInfo, a digest (NULL for Ed25519), the
+ * bytes and the signature. why receives OpenSSL's reason when the result is
+ * ERROR, which is how a FIPS refusal -- "unsupported", "disallowed", a key
+ * below the approved size -- reaches a log line instead of reading as a
+ * malformed certificate. */
+static ssoossh_verify_result verify_spki(const uint8_t *spki, size_t spki_len,
+                                         const EVP_MD *md, const uint8_t *msg,
+                                         size_t msg_len, const uint8_t *sig,
+                                         size_t sig_len, const char **why)
+{
+    const uint8_t *spki_p = spki;
+    EVP_PKEY *pkey = NULL;
+    EVP_MD_CTX *ctx = NULL;
+    ssoossh_verify_result result = SSOOSSH_VERIFY_ERROR;
+    int rc;
+
+    *why = NULL;
+    ERR_clear_error();
+
+    pkey = d2i_PUBKEY(NULL, &spki_p, (long)spki_len);
+    if (pkey == NULL) {
+        *why = openssl_reason();
+        return SSOOSSH_VERIFY_ERROR;
+    }
+
+    ctx = EVP_MD_CTX_new();
+    if (ctx == NULL) {
+        *why = "out of memory";
+        goto done;
+    }
+    if (EVP_DigestVerifyInit(ctx, NULL, md, NULL, pkey) != 1) {
+        *why = openssl_reason();
+        goto done;
+    }
+
+    /* One-shot EVP_DigestVerify for every algorithm, not only Ed25519,
+     * which requires it. The whole signed extent is already in memory --
+     * sshcert.c captured it as an offset into the certificate blob -- so
+     * there is nothing to stream. */
+    rc = EVP_DigestVerify(ctx, sig, sig_len, msg, msg_len);
+    if (rc == 1) {
+        result = SSOOSSH_VERIFY_OK;
+    } else if (rc == 0) {
+        result = SSOOSSH_VERIFY_BAD;
+        ERR_clear_error();
+    } else {
+        *why = openssl_reason();
+    }
+
+done:
+    EVP_MD_CTX_free(ctx);
+    EVP_PKEY_free(pkey);
+    return result;
+}
+
 ssoossh_verify_result ssoossh_crypto_verify(const char *sig_algo,
                                             const uint8_t *ca_key,
                                             size_t ca_key_len,
@@ -279,14 +466,11 @@ ssoossh_verify_result ssoossh_crypto_verify(const char *sig_algo,
     uint8_t spki_buf[2048];
     uint8_t der_sig[256];
     char key_type[64];
-    const uint8_t *spki_p;
     const char *want_key_type = NULL;
+    const char *why = NULL;
     const EVP_MD *md = NULL;
     size_t spki_len = 0;
-    EVP_PKEY *pkey = NULL;
-    EVP_MD_CTX *ctx = NULL;
-    ssoossh_verify_result result = SSOOSSH_VERIFY_ERROR;
-    int rc;
+    ssoossh_verify_result result;
 
     if (!sig_algo_info(sig_algo, &want_key_type, &md)) {
         return SSOOSSH_VERIFY_UNSUPPORTED;
@@ -301,42 +485,26 @@ ssoossh_verify_result ssoossh_crypto_verify(const char *sig_algo,
         return SSOOSSH_VERIFY_ERROR;
     }
 
-    spki_p = spki_buf;
-    pkey = d2i_PUBKEY(NULL, &spki_p, (long)spki_len);
-    if (pkey == NULL) {
-        return SSOOSSH_VERIFY_ERROR;
-    }
-
     if (strncmp(sig_algo, "ecdsa-", 6) == 0) {
         size_t n = 0;
         if (!ecdsa_sig_to_der(sig, sig_len, der_sig, sizeof(der_sig), &n)) {
-            goto done;
+            return SSOOSSH_VERIFY_ERROR;
         }
         sig = der_sig;
         sig_len = n;
     } else if (strcmp(sig_algo, "ssh-ed25519") == 0 && sig_len != 64) {
-        goto done;
+        return SSOOSSH_VERIFY_ERROR;
     }
 
-    ctx = EVP_MD_CTX_new();
-    if (ctx == NULL) {
-        goto done;
+    result =
+        verify_spki(spki_buf, spki_len, md, msg, msg_len, sig, sig_len, &why);
+    if (result == SSOOSSH_VERIFY_ERROR && why != NULL) {
+        /* The one place a FIPS refusal of an RSA or ECDSA CA surfaces: the
+         * caller reports "could not be verified", and this line says why
+         * in OpenSSL's words. */
+        ssoossh_errf("%s verification with a %s key failed in %s: %s", sig_algo,
+                     key_type, OpenSSL_version(OPENSSL_VERSION), why);
     }
-    if (EVP_DigestVerifyInit(ctx, NULL, md, NULL, pkey) != 1) {
-        goto done;
-    }
-
-    /* One-shot EVP_DigestVerify for every algorithm, not only Ed25519,
-     * which requires it. The whole signed extent is already in memory --
-     * sshcert.c captured it as an offset into the certificate blob -- so
-     * there is nothing to stream. */
-    rc = EVP_DigestVerify(ctx, sig, sig_len, msg, msg_len);
-    result = (rc == 1) ? SSOOSSH_VERIFY_OK
-                       : (rc == 0 ? SSOOSSH_VERIFY_BAD : SSOOSSH_VERIFY_ERROR);
-
-done:
-    EVP_MD_CTX_free(ctx);
-    EVP_PKEY_free(pkey);
     return result;
 }
 

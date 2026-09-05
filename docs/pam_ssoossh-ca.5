@@ -1,0 +1,96 @@
+.\" Manual page for the trusted CA file pam_ssoossh reads.
+.TH PAM_SSOOSSH\-CA 5 "2026-09-05" "pam_ssoossh" "File Formats Manual"
+.SH NAME
+pam_ssoossh\-ca \- trusted certificate authorities for pam_ssoossh
+.SH SYNOPSIS
+.I /etc/ssoossh/ca.pub
+.SH DESCRIPTION
+The file named by
+.BR pam_ssoossh (8)'s
+.B trusted\-ca\-file
+argument lists the certificate authorities whose signature on a certificate
+is accepted. It is the
+.BR authorized_keys (5)
+public\-key format: one key per line, as
+.I type base64 [comment]
+\(em the same line
+.BR ssh\-keygen (1)
+writes to a
+.I .pub
+file and
+.BR sshd (8)
+reads from
+.BR TrustedUserCAKeys .
+The public half of the CA
+.B ssoosshd
+signs with is what belongs here.
+.PP
+Blank lines and lines starting with
+.B #
+are ignored. Options before the key type, as
+.BR sshd (8)
+allows in
+.BR authorized_keys ,
+are not: a line must start with the key type.
+.SH ROTATION
+The file is read on every authentication, so a CA can be added before the
+server starts signing with it and the old one removed afterwards, with no
+restart of anything on the host. A file may list several CAs at once and a
+certificate signed by any of them passes.
+.PP
+A key of a type this build's crypto cannot verify (see
+.B CERTIFICATE ALGORITHMS
+in
+.BR pam_ssoossh (8))
+is skipped with a warning naming its type and line number, and the rest of
+the file still applies. That is deliberate: an Ed25519 CA appended on a
+Friday must not take every host of a different platform offline, and must
+certainly not do it with "not signed by a trusted CA" as the only
+explanation. A file with no usable key at all, or that cannot be read, makes
+.BR pam_ssoossh (8)
+return
+.B PAM_NO_MODULE_DATA
+before it contacts the server.
+.PP
+A line that is present but not a key \(em a truncated paste, a base64 typo
+\(em is a malformed file, and the whole file is refused with an error naming
+the line. Keys that parsed are not used from a file that also holds
+garbage, because a file in that state is more likely mid\-edit than
+intended.
+.SH LIMITS
+Up to 32 keys are read; further lines are ignored with a warning. A file
+larger than 32 KiB is refused, and a line longer than 3072 bytes is
+malformed. Real CA files are a few hundred bytes.
+.SH EXAMPLE
+.RS
+.nf
+# CAs ssoosshd signs PAM certificates with. Rotation in progress:
+# the ECDSA key is current, the Ed25519 one takes over next week.
+ecdsa\-sha2\-nistp384 AAAAE2VjZHNhLXNoYTItbmlzdHAzODQAAAAIbmlzdHAzODQAAABh... ssoossh\-ca\-2026
+ssh\-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJDgdf6ZrlMZNcQIVtB0PPlHZxqh/cv1NWNFbfays7RF ssoossh\-ca\-2027
+.fi
+.RE
+.PP
+To check what a host will accept, the fingerprints
+.BR ssh\-keygen (1)
+prints are the ones the module logs:
+.PP
+.RS
+.nf
+$ ssh\-keygen \-l \-f /etc/ssoossh/ca.pub
+.fi
+.RE
+.SH FILES
+.I /etc/ssoossh/ca.pub
+is the path the shipped examples use. Nothing in the module fixes it; the
+file should be owned by root and readable by the users of the services
+that load the module, which for
+.BR sudo (8)
+and
+.BR sshd (8)
+means root alone.
+.SH SEE ALSO
+.BR pam_ssoossh (8),
+.BR pam_ssoossh\-principals (5),
+.BR ssh\-keygen (1),
+.BR sshd (8)

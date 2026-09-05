@@ -109,6 +109,15 @@ rm -f cert_other_key.pub
 cat ca_ecdsa384.pub                      > cas_one.pub
 cat ca_ecdsa256.pub ca_ecdsa384.pub      > cas_two.pub
 cat ca_ed25519.pub ca_ecdsa384.pub       > cas_mixed.pub
+# A CA type no backend supports, beside one every backend does, for the
+# skip-with-a-warning path. Hand-built: the blob is only the type string,
+# which is all the loader reads before asking the backend, and ssh-keygen
+# on a current OpenSSH will not mint a DSA key at all.
+{
+    printf 'ssh-dss %s ca_dss_unusable_everywhere\n' \
+        "$(printf '\000\000\000\007ssh-dss' | base64)"
+    cat ca_ecdsa384.pub
+} > cas_unusable.pub
 {
     echo "# a comment line"
     echo

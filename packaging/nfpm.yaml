@@ -1,0 +1,118 @@
+# nfpm (https://nfpm.goreleaser.com) -- deb, rpm and apk from the files
+# `make dist` already produces. Nothing is built here: the module in the
+# package is the one from the release tarball for the same target, so a
+# package and its tarball are the same bytes on two roads to the host.
+#
+# Every ${VAR} is set by packaging/package.sh from the tarball's BUILDINFO
+# and the target name; that script is where the formats and the module
+# directory per distribution are decided. What each format calls the
+# libraries the module needs is here, per packager, because that is where
+# someone packaging by hand would look for it.
+name: pam-ssoossh
+arch: ${PKG_ARCH}
+platform: linux
+version: ${PKG_VERSION}
+prerelease: ${PKG_PRERELEASE}
+version_schema: semver
+section: admin
+priority: optional
+maintainer: ${PKG_MAINTAINER}
+vendor: ${PKG_MAINTAINER}
+homepage: ${PKG_HOMEPAGE}
+license: MIT
+description: |
+  PAM module authenticating against ssoosshd.
+  Loads into sudo, sshd and login; links the operating system's own
+  libcrypto, libcurl and libpam and ships no crypto of its own.
+  Built for ${PKG_TARGET}: see /usr/share/doc/pam-ssoossh/BUILDINFO.
+
+# Sources are relative to the staging directory package.sh unpacks the
+# tarball into and runs nfpm from. @SECURITYDIR@ is substituted by that
+# script before nfpm reads this file, because the module directory differs
+# per format and nfpm expands no variables in destinations. Every entry is
+# a file with an explicit mode: a `type: tree` entry would be shorter, but
+# nfpm 2.47 writes tree modes apk-tools rejects (goreleaser/nfpm#1112).
+contents:
+  - src: pam_ssoossh.so
+    dst: @SECURITYDIR@/pam_ssoossh.so
+    file_info:
+      mode: 0644
+  - src: man/*.8.gz
+    dst: /usr/share/man/man8/
+    file_info:
+      mode: 0644
+  - src: man/*.5.gz
+    dst: /usr/share/man/man5/
+    file_info:
+      mode: 0644
+  - src: examples/pam.d/*
+    dst: /usr/share/doc/pam-ssoossh/examples/pam.d/
+    file_info:
+      mode: 0644
+  - src: examples/*.yaml
+    dst: /usr/share/doc/pam-ssoossh/examples/
+    file_info:
+      mode: 0644
+  - src: examples/README
+    dst: /usr/share/doc/pam-ssoossh/examples/README
+    file_info:
+      mode: 0644
+  - src: BUILDINFO
+    dst: /usr/share/doc/pam-ssoossh/BUILDINFO
+    file_info:
+      mode: 0644
+  - src: LICENSE
+    dst: /usr/share/doc/pam-ssoossh/LICENSE
+    file_info:
+      mode: 0644
+  # Debian wants the licence under this name too.
+  - src: LICENSE
+    dst: /usr/share/doc/pam-ssoossh/copyright
+    packager: deb
+    file_info:
+      mode: 0644
+
+# The dependencies are the sonames the module links -- what rpmbuild and
+# abuild would derive themselves -- wherever the format can express that.
+# Debian cannot, so there it is package names, with both spellings of the
+# ones the 64-bit time_t transition renamed on Debian 13 and Ubuntu 24.04.
+# PKG_CRYPTO_SO is libcrypto.so.3 or libcrypto.so.1.1 by target.
+overrides:
+  deb:
+    depends:
+      - libpam0g
+      - ${PKG_DEB_CRYPTO}
+      - libcurl4t64 | libcurl4
+      - libc6 (>= 2.34)
+  rpm:
+    depends:
+      - pam
+      - ${PKG_CRYPTO_SO}()(64bit)
+      - libcurl.so.4()(64bit)
+      - libpam.so.0()(64bit)
+  apk:
+    depends:
+      - linux-pam
+      - so:${PKG_CRYPTO_SO}
+      - so:libcurl.so.4
+      - so:libpam.so.0
+
+# Signing. An empty key_file means unsigned, which is what a local build
+# gets; the release workflow supplies the keys from repository secrets.
+# deb and rpm take the OpenPGP key. apk does not: Alpine signs with a bare
+# RSA key whose public half a host installs as /etc/apk/keys/<key_name>.rsa.pub
+# -- nfpm adds that suffix itself, and expands no variables here, so the
+# name is a literal and packaging/README.md repeats it.
+deb:
+  signature:
+    key_file: ${PKG_GPG_KEY_FILE}
+    type: origin
+rpm:
+  summary: PAM module authenticating against ssoosshd
+  group: System Environment/Base
+  signature:
+    key_file: ${PKG_GPG_KEY_FILE}
+apk:
+  signature:
+    key_file: ${PKG_APK_KEY_FILE}
+    key_name: pam-ssoossh

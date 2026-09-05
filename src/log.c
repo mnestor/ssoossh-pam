@@ -71,6 +71,14 @@ void ssoossh_log_version(void)
      * authentication is what makes that a syslog grep across a fleet
      * instead of guesswork -- including for a host whose distribution has
      * stopped issuing updates. */
-    ssoossh_infof("%s | crypto: %s | http: %s", PAM_SSOOSSH_VERSION,
-                  ssoossh_crypto_version(), ssoossh_httpc_version());
+    const char *fips = ssoossh_crypto_fips_state();
+
+    if (fips != NULL) {
+        ssoossh_infof("%s | crypto: %s | fips: %s | http: %s",
+                      PAM_SSOOSSH_VERSION, ssoossh_crypto_version(), fips,
+                      ssoossh_httpc_version());
+    } else {
+        ssoossh_infof("%s | crypto: %s | http: %s", PAM_SSOOSSH_VERSION,
+                      ssoossh_crypto_version(), ssoossh_httpc_version());
+    }
 }

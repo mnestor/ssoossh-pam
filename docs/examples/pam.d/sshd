@@ -1,0 +1,37 @@
+# pam_ssoossh for sshd(8): approve an SSH login in a browser.
+#
+# sshd runs PAM through keyboard-interactive authentication, and relays the
+# module's "Approve this request in your browser: <url>" message to the
+# client, where the person logging in sees it in their terminal. This is
+# always the browser flow: PAM_RHOST is set for an SSH session, so
+# mode=auto never picks the console flow here.
+#
+# sshd_config(5) needs, in addition to this file:
+#
+#   UsePAM yes
+#   KbdInteractiveAuthentication yes     (ChallengeResponseAuthentication yes
+#                                         on OpenSSH older than 8.7)
+#
+# Public-key logins are not affected by this line: sshd only consults PAM's
+# auth stack for keyboard-interactive. To require *both* a key and an
+# approval, add
+#
+#   AuthenticationMethods publickey,keyboard-interactive
+#
+# to sshd_config, and then this line is the second factor.
+#
+# Some distributions gate the whole sshd PAM stack with pam_nologin.so or
+# pam_listfile.so before authentication; leave those where they are.
+#
+# Test with an existing SSH session kept open, and with `sshd -t` before
+# restarting sshd.
+
+auth    sufficient  pam_ssoossh.so server=https://ssoossh.example.com \
+                    trusted-ca-file=/etc/ssoossh/ca.pub \
+                    principals-map=/etc/ssoossh/principals.yaml \
+                    timeout=90s
+
+# then the distribution's include:
+#   Debian, Ubuntu        @include common-auth
+#   RHEL, Alma, Rocky     auth substack password-auth
+#   Alpine                auth include base-auth

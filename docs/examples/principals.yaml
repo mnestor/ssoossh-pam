@@ -1,0 +1,26 @@
+# /etc/ssoossh/principals.yaml -- who may become each local account.
+#
+# Left side: a local account on this host. Right side: the certificate
+# principals allowed to authenticate as it. For a PAM request, ssoosshd puts
+# the *approver's* identity in the principals -- their username as the
+# identity provider spells it -- never the local account that was asked
+# for. So list identities here, not local names, unless they are the same.
+#
+# Once this file loads it is authoritative: an account with no entry is
+# denied, even if a certificate principal happens to equal its name. A file
+# that fails to load is ignored with a warning, and the module then requires
+# the exact local account name -- stricter, never looser.
+#
+# Format: a fixed subset of YAML, see pam_ssoossh-principals(5). Block
+# lists, flow lists, and empty (or null / ~) entries. Nothing else.
+
+alice:
+  - alice
+bob: [bob]
+
+# A shared account two people may become.
+deploy: [alice, bob]
+
+# Nobody becomes root through ssoossh. An entry with no principals is a
+# deliberate "no"; leaving root out entirely would mean the same.
+root:

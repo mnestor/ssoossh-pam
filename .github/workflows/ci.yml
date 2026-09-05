@@ -50,9 +50,39 @@ jobs:
             install: dnf install -y gcc make pkgconf-pkg-config openssl-devel
               libcurl-devel pam pam-devel git libasan libubsan openssh-clients
               python3
+          - name: el9               # OpenSSL 3.x with a FIPS provider, gcc 11
+            container: almalinux:9
+            install: dnf install -y gcc make pkgconf-pkg-config openssl-devel
+              libcurl-devel pam pam-devel git libasan libubsan openssh-clients
+              python3
+          # The same two, with OpenSSL forced into FIPS mode the way Red
+          # Hat's build allows without a fips=1 kernel. el8's FIPS module
+          # has no EdDSA, so this is where the Ed25519 probe must say no and
+          # the ECDSA-only path must carry the whole flow; el9's does, so
+          # there everything must still work.
+          - name: el8-fips
+            container: almalinux:8
+            fips: 1
+            install: dnf install -y gcc make pkgconf-pkg-config openssl-devel
+              libcurl-devel pam pam-devel git libasan libubsan openssh-clients
+              python3
+          - name: el9-fips
+            container: almalinux:9
+            fips: 1
+            install: dnf install -y gcc make pkgconf-pkg-config openssl-devel
+              libcurl-devel pam pam-devel git libasan libubsan openssh-clients
+              python3
     steps:
       - name: Install build dependencies
         run: ${{ matrix.install }}
+
+      # Set only for the FIPS rows: Red Hat's OpenSSL honours the variable
+      # by presence, so an empty value would force FIPS on every row.
+      - name: Force OpenSSL into FIPS mode
+        if: ${{ matrix.fips }}
+        run: |
+          echo "OPENSSL_FORCE_FIPS_MODE=1" >> "$GITHUB_ENV"
+          OPENSSL_FORCE_FIPS_MODE=1 openssl md5 /dev/null 2>&1 | tail -1
 
       - uses: actions/checkout@v4
 
@@ -66,6 +96,7 @@ jobs:
           cc --version | head -1
           pkg-config --modversion libcrypto || true
           pkg-config --modversion libcurl || true
+          echo "OPENSSL_FORCE_FIPS_MODE=${OPENSSL_FORCE_FIPS_MODE:-unset}"
 
       - name: Build
         run: make

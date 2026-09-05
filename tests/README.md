@@ -4,12 +4,13 @@ Five harnesses, split by what they need and what they can reach.
 
 | | Needs | Reaches |
 | --- | --- | --- |
-| `make test` | nothing | the symbol set, the loader, and 15 unit suites |
+| `make test` | nothing | the symbol set, the loader, and 16 unit suites |
 | `make san` | nothing | the same, under ASan and UBSan |
 | `make fuzz-run` | clang | every parser that reads bytes the module did not write |
 | `sudo make e2e` | root, python3, ssh-keygen | the whole flow, through a real PAM stack |
 | `sudo make differential` | the above, plus a built Go module | both modules, side by side |
 | `tests/pamtest` | root | one attempt, by hand, against whatever you point it at |
+| `make check-apple-spi` | macOS | the Ed25519 SPI, in the SDK and through the running framework |
 
 ## `make test` — runs anywhere, no privileges
 
@@ -20,7 +21,7 @@ loadtest: ok (./pam_ssoossh.so)
 duration         ok
 args             ok
 ...
-unit: ok (15 suites)
+unit: ok (16 suites)
 ```
 
 `make check-symbols` reads the symbol table statically and asserts that
@@ -291,6 +292,17 @@ Because every job in `ci.yml` runs inside its own `container:`, what act
 executes is close to what GitHub will — the runner image is only a host for
 the job container. That makes a local run worth trusting for everything except
 runner-specific behaviour (secrets, OIDC, the hosted tool cache).
+
+The release workflow's Linux rows run under act too, one matrix entry at a
+time, and every project step passes; only the final `upload-artifact` fails,
+with exit 127, because act cannot put a Node runtime into a job container
+the way GitHub's runners do ([nektos/act#107](https://github.com/nektos/act/issues/107)).
+That is act's limit, not the workflow's:
+
+```console
+$ act push -W .github/workflows/release.yml -j linux \
+      --matrix target:linux-x86_64-musl --artifact-server-path build/act-artifacts
+```
 
 FreeBSD and macOS are in `.github/workflows/cross-platform.yml` behind
 `workflow_dispatch`, and act cannot run either: there is no macOS runner to

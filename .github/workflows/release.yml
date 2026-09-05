@@ -1,0 +1,314 @@
+name: Release
+
+# Builds every artifact the README says ships, gates each one the way CI
+# does, wraps the Linux ones as deb, rpm and apk, and publishes the lot as
+# one GitHub release with checksums and build provenance.
+#
+# Plain actions, nfpm and `gh`, not goreleaser: goreleaser is built around
+# producing the binaries itself, which for C means either a paid "prebuilt"
+# mode or fighting the tool, and the part of it that is useful here -- nfpm
+# -- is a standalone binary. Everything specific to this project lives in
+# `make dist`, tests/dist-target.sh and packaging/, so this file is only a
+# matrix, an upload, a download, a loop and a `gh release create`.
+#
+# The artifact names carry what decides whether the module will load on a
+# host, because it links the host's libraries rather than shipping them:
+#
+#   linux-x86_64-glibc-openssl3     RHEL 9+, Debian 12+, Ubuntu 22.04+ ...
+#   linux-x86_64-glibc-openssl1.1   RHEL 8 and its rebuilds
+#   linux-x86_64-musl               Alpine
+#   freebsd14-x86_64                FreeBSD 14
+#
+# and aarch64 for each Linux row. The glibc rows are built on the *oldest*
+# glibc that carries that OpenSSL -- AlmaLinux 9 for OpenSSL 3, AlmaLinux 8
+# for 1.1.1 -- because glibc symbol versions only go forward: a module
+# built on an older glibc loads on a newer one, never the reverse.
+#
+#   git tag v1.2.0 && git push origin v1.2.0     builds and publishes
+#   gh workflow run release.yml                  builds only; the merged set
+#                                                is a workflow artifact
+#
+# A tag with a hyphen (v1.2.0-rc1) is published as a pre-release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # AlmaLinux rather than ubi: pam-devel is not in the unentitled
+          # UBI repositories. Same ABI, same versions -- see ci.yml.
+          - target: linux-x86_64-glibc-openssl3
+            runner: ubuntu-latest
+            container: almalinux:9
+            install: dnf install -y gcc make pkgconf-pkg-config openssl-devel
+              libcurl-devel pam pam-devel git binutils openssh-clients python3
+          - target: linux-aarch64-glibc-openssl3
+            runner: ubuntu-24.04-arm
+            container: almalinux:9
+            install: dnf install -y gcc make pkgconf-pkg-config openssl-devel
+              libcurl-devel pam pam-devel git binutils openssh-clients python3
+          - target: linux-x86_64-glibc-openssl1.1
+            runner: ubuntu-latest
+            container: almalinux:8
+            install: dnf install -y gcc make pkgconf-pkg-config openssl-devel
+              libcurl-devel pam pam-devel git binutils openssh-clients python3
+          - target: linux-aarch64-glibc-openssl1.1
+            runner: ubuntu-24.04-arm
+            container: almalinux:8
+            install: dnf install -y gcc make pkgconf-pkg-config openssl-devel
+              libcurl-devel pam pam-devel git binutils openssh-clients python3
+          - target: linux-x86_64-musl
+            runner: ubuntu-latest
+            container: alpine:3
+            install: apk add --no-cache build-base pkgconf openssl-dev curl-dev
+              linux-pam-dev linux-pam git openssh-keygen python3 bash tar
+          - target: linux-aarch64-musl
+            runner: ubuntu-24.04-arm
+            container: alpine:3
+            install: apk add --no-cache build-base pkgconf openssl-dev curl-dev
+              linux-pam-dev linux-pam git openssh-keygen python3 bash tar
+    steps:
+      - name: Install build dependencies
+        run: ${{ matrix.install }}
+
+      # Full history and tags, so `git describe` names the release rather
+      # than a bare commit.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # The image must be what the matrix row says it is. A base image
+      # that starts shipping a different OpenSSL would otherwise produce a
+      # mislabelled artifact that loads on nobody's host.
+      - name: The image matches the target name
+        run: |
+          got=$(tests/dist-target.sh)
+          echo "image reports: $got"
+          test "$got" = "${{ matrix.target }}"
+
+      - name: Build
+        run: make
+
+      # The same gates ci.yml runs, because a release is not the place to
+      # trust that main was green.
+      - name: Symbol, load and unit gates
+        run: make test
+
+      - name: No stdio in the module
+        run: make check-stdio
+
+      - name: Size gate
+        run: make check-size
+
+      - name: End to end against a stub server
+        run: make e2e
+
+      - name: Package
+        run: make dist DIST_TARGET=${{ matrix.target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  # No hosted FreeBSD image exists; a VM on the Linux runner, as in
+  # cross-platform.yml. Slower, but it is the OpenPAM platform that ships.
+  freebsd:
+    name: freebsd14-x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: cross-platform-actions/action@v0.27.0
+        with:
+          operating_system: freebsd
+          version: '14.2'
+          run: |
+            set -ex
+            sudo pkg install -y gmake pkgconf curl bash python3
+            got=$(tests/dist-target.sh)
+            echo "image reports: $got"
+            test "$got" = freebsd14-x86_64
+            gmake
+            gmake test
+            gmake check-stdio
+            gmake check-size
+            gmake tests/pamtest
+            sudo gmake e2e
+            gmake dist DIST_TARGET=freebsd14-x86_64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-freebsd14-x86_64
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  # Everything into one place, checksummed, attested, published.
+  release:
+    name: release
+    needs: [linux, freebsd]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # gh release create
+      id-token: write      # provenance attestation
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+
+      # Every matrix row must have produced exactly one tarball. A missing
+      # one here means a job was skipped rather than failed.
+      - name: Every artifact arrived
+        run: |
+          cd dist
+          want=7
+          set -- *.tar.gz
+          test "$#" -eq "$want" || { echo "expected $want artifacts, got $#"; exit 1; }
+          ls -l
+
+      # deb, rpm and apk from the Linux tarballs. nfpm is pinned by version
+      # and hash; bump both together from
+      # https://github.com/goreleaser/nfpm/releases.
+      - name: Install nfpm
+        env:
+          NFPM_VERSION: 2.47.0
+          NFPM_SHA256: 0660ca602b2d2d2ae4781a06c692b3eeb9d437ffea05b831d76e41f4a3188783
+        run: |
+          curl -fsSLo nfpm.tar.gz \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          echo "${NFPM_SHA256}  nfpm.tar.gz" | sha256sum -c -
+          sudo tar -C /usr/local/bin -xzf nfpm.tar.gz nfpm
+          nfpm --version | grep GitVersion
+
+      # Signing keys, from repository secrets, into files nfpm and gpg can
+      # read. All optional: a repository without them still gets its
+      # release, unsigned, and the log says so.
+      #
+      #   RELEASE_GPG_PRIVATE_KEY   armored OpenPGP private key; signs the
+      #                             deb and rpm packages and SHA256SUMS
+      #   RELEASE_GPG_PASSPHRASE    its passphrase, if any
+      #   RELEASE_APK_PRIVATE_KEY   RSA private key, PEM; signs the apk.
+      #                             Alpine does not use OpenPGP, so this is
+      #                             a second key -- see packaging/README.md
+      - name: Signing keys
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
+          APK_PRIVATE_KEY: ${{ secrets.RELEASE_APK_PRIVATE_KEY }}
+        run: |
+          keys=$(mktemp -d)
+          chmod 700 "$keys"
+          if [ -n "$GPG_PRIVATE_KEY" ]; then
+            printf '%s\n' "$GPG_PRIVATE_KEY" > "$keys/gpg.asc"
+            echo "PKG_GPG_KEY_FILE=$keys/gpg.asc" >> "$GITHUB_ENV"
+            echo "gpg: signing with the release key"
+          else
+            echo "gpg: RELEASE_GPG_PRIVATE_KEY is not set; deb, rpm and SHA256SUMS will be unsigned"
+          fi
+          if [ -n "$APK_PRIVATE_KEY" ]; then
+            printf '%s\n' "$APK_PRIVATE_KEY" > "$keys/apk.pem"
+            echo "PKG_APK_KEY_FILE=$keys/apk.pem" >> "$GITHUB_ENV"
+            echo "apk: signing with the release key"
+          else
+            echo "apk: RELEASE_APK_PRIVATE_KEY is not set; the apk will be unsigned"
+          fi
+          echo "SIGNING_KEYS=$keys" >> "$GITHUB_ENV"
+
+      - name: Packages
+        env:
+          PKG_HOMEPAGE: ${{ github.server_url }}/${{ github.repository }}
+          NFPM_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
+        run: |
+          for t in dist/*.tar.gz; do
+            packaging/package.sh "$t" dist
+          done
+          ls -l dist
+
+      # SHA256SUMS covers everything, and the GPG signature over it covers
+      # the tarballs, which have no signature of their own. The public key
+      # is published beside it so a first-time verifier has something to
+      # import; its fingerprint belongs in the README too, so the release
+      # is not the only place the key is vouched for.
+      - name: Checksums and signature
+        env:
+          NFPM_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
+        run: |
+          cd dist
+          sha256sum -- *.tar.gz *.deb *.rpm *.apk | tee SHA256SUMS
+          if [ -n "${PKG_GPG_KEY_FILE:-}" ]; then
+            export GNUPGHOME="$SIGNING_KEYS/gnupg"
+            mkdir -p "$GNUPGHOME" && chmod 700 "$GNUPGHOME"
+            gpg --batch --import "$PKG_GPG_KEY_FILE"
+            gpg --batch --yes --pinentry-mode loopback \
+              --passphrase "$NFPM_PASSPHRASE" --armor --detach-sign SHA256SUMS
+            gpg --batch --armor --export > pam-ssoossh-release-key.asc
+            gpg --batch --verify SHA256SUMS.asc SHA256SUMS
+          fi
+          if [ -n "${PKG_APK_KEY_FILE:-}" ]; then
+            openssl rsa -in "$PKG_APK_KEY_FILE" -pubout -out pam-ssoossh.rsa.pub
+          fi
+          ls -l
+
+      # Build provenance, verifiable with `gh attestation verify`. Only for
+      # a repository where GitHub offers it -- public, or private under
+      # enterprise -- so a private repository still gets its release.
+      - name: Attest provenance
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/*.apk
+
+      - name: Publish the release
+        if: ${{ github.ref_type == 'tag' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$GITHUB_REF_NAME" in
+            *-*) pre=--prerelease ;;
+            *)   pre= ;;
+          esac
+          # shellcheck disable=SC2086  # $pre is deliberately empty or one flag
+          gh release create "$GITHUB_REF_NAME" $pre \
+            --verify-tag --generate-notes \
+            --title "$GITHUB_REF_NAME" \
+            dist/*.tar.gz dist/*.deb dist/*.rpm dist/*.apk dist/SHA256SUMS* dist/*.asc dist/*.pub
+
+      # On a manual run there is no tag and no release: the merged set is
+      # kept as a workflow artifact for inspection instead.
+      - uses: actions/upload-artifact@v4
+        if: ${{ github.ref_type != 'tag' }}
+        with:
+          name: release-dry-run
+          path: dist/*
+          retention-days: 7

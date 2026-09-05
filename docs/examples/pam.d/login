@@ -1,0 +1,37 @@
+# pam_ssoossh for login(1) on a console: a code and a QR code instead of a
+# URL.
+#
+# A getty login has no PAM_RHOST and a tty that is a virtual console or a
+# serial line, so mode=auto runs the console flow: the module prints a short
+# code and a QR code, and the approver carries either to a phone or laptop.
+# `mode=console` is written out below anyway, so the file says what it
+# means; `mode=auto` would choose the same.
+#
+# Two guards are worth having on a console:
+#
+#   * root should never see an approval prompt -- an ssoossh account that
+#     may become root is a decision for the principals map, not for the
+#     console, and the pam_succeed_if line below skips the module for root.
+#     Replace `user != root` with `user ingroup ssoossh-console` to allow
+#     only members of a group instead.
+#
+#   * pam_securetty.so stays first, as your distribution ships it.
+#
+# A console login has more time to walk to another device, hence the longer
+# timeout. The line still falls through to the password prompt on a denial,
+# a timeout, or an unreachable server.
+#
+# Test on a spare virtual console (Alt-F3, say) with a root shell open on
+# another one.
+
+auth    requisite   pam_securetty.so
+auth    [success=ignore default=1]  pam_succeed_if.so user != root quiet
+auth    sufficient  pam_ssoossh.so server=https://ssoossh.example.com \
+                    trusted-ca-file=/etc/ssoossh/ca.pub \
+                    principals-map=/etc/ssoossh/principals.yaml \
+                    mode=console timeout=120s
+
+# then the distribution's include:
+#   Debian, Ubuntu        @include common-auth
+#   RHEL, Alma, Rocky     auth substack system-auth
+#   Alpine                auth include base-auth

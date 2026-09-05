@@ -272,6 +272,16 @@ check-size: $(MODULE)
 	  exit 1; \
 	fi
 
+# macOS only: the Ed25519 SPI the Darwin backend resolves at runtime,
+# checked in the SDK's export list and through the running framework. Both
+# views, because they drift separately -- see tests/apple-spi-check.sh and
+# docs/porting.md. Elsewhere it reports that there is nothing to check.
+check-apple-spi:
+	@if [ "$(UNAME)" = "Darwin" ]; then \
+	  $(MAKE) --no-print-directory tests/unit_tests; \
+	fi; \
+	tests/apple-spi-check.sh
+
 # The whole flow against tests/stubd.py, through a real PAM stack. Needs
 # root to install the module and write /etc/pam.d -- see tests/README.md.
 #
@@ -364,11 +374,15 @@ cross:
 # use than an error about a tool the caller may not want to install.
 lint:
 	@rc=0; \
-	for t in actionlint shellcheck clang-format cppcheck; do \
+	for t in actionlint shellcheck clang-format cppcheck groff; do \
 	  command -v $$t >/dev/null || { echo "lint: $$t not installed, skipping"; continue; }; \
 	  case $$t in \
 	    actionlint)    actionlint || rc=1 ;; \
-	    shellcheck)    shellcheck tests/*.sh || rc=1 ;; \
+	    groff)         for m in docs/*.[58]; do \
+	                     out=$$(groff -man -Tutf8 -z -ww "$$m" 2>&1); \
+	                     [ -z "$$out" ] || { echo "$$m:"; echo "$$out"; rc=1; }; \
+	                   done ;; \
+	    shellcheck)    shellcheck tests/*.sh packaging/*.sh || rc=1 ;; \
 	    clang-format)  clang-format --dry-run --Werror src/*.c src/*.h tests/*.c || rc=1 ;; \
 	    cppcheck)      cppcheck --quiet --error-exitcode=1 \
 	                     --enable=warning,portability \
@@ -425,7 +439,65 @@ plan-serve:
 	npx -y @agent-native/core@latest plan local serve \
 	    --dir plans/pam-ssoossh-c --kind plan --port 8787
 
+# A release artifact: the stripped module, the man pages, the example
+# pam.d stanzas, the licence, and a BUILDINFO naming what it was built with and which sonames it needs --
+# which is the question an operator has, since the module links the host's
+# libraries rather than shipping them. tests/dist-target.sh names the
+# platform; the release workflow passes DIST_TARGET explicitly and asserts
+# the two agree.
+#
+#   make dist                                    dist/pam_ssoossh-<version>-<target>.tar.gz
+#   make dist DIST_TARGET=linux-x86_64-musl      name it for the workflow's matrix entry
+DIST        := dist
+DIST_TARGET ?= $(shell tests/dist-target.sh)
+DIST_NAME   := pam_ssoossh-$(VERSION)-$(DIST_TARGET)
+
+dist:
+	@if nm $(MODULE) 2>/dev/null | grep -q asan; then \
+	  echo "dist: the built module is sanitised; rebuilding it plain"; \
+	  $(MAKE) --no-print-directory clean; \
+	fi
+	@$(MAKE) --no-print-directory $(MODULE)
+	@set -e; \
+	stage=$(BUILD)/$(DIST_NAME); \
+	rm -rf "$$stage"; mkdir -p "$$stage" $(DIST); \
+	cp $(MODULE) "$$stage/pam_ssoossh.so"; \
+	strip --strip-unneeded "$$stage/pam_ssoossh.so" 2>/dev/null || strip "$$stage/pam_ssoossh.so"; \
+	cp LICENSE "$$stage/"; \
+	mkdir -p "$$stage/man" "$$stage/examples"; \
+	cp docs/*.8 docs/*.5 "$$stage/man/"; \
+	cp -R docs/examples/. "$$stage/examples/"; \
+	{ \
+	  echo "package:   $(DIST_NAME)"; \
+	  echo "version:   $(VERSION)"; \
+	  echo "target:    $(DIST_TARGET)"; \
+	  echo "built:     $$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+	  echo "host:      $$(uname -srm)"; \
+	  echo "compiler:  $$($(CC) --version 2>/dev/null | head -1)"; \
+	  echo "libcrypto: $$(pkg-config --modversion libcrypto 2>/dev/null || echo 'Security.framework')"; \
+	  echo "libcurl:   $$(pkg-config --modversion libcurl 2>/dev/null || echo '?')"; \
+	  echo "needs:"; \
+	  if command -v readelf >/dev/null; then \
+	    readelf -d "$$stage/pam_ssoossh.so" | awk '/NEEDED/ {gsub(/[][]/, "", $$5); print "  " $$5}'; \
+	  elif command -v otool >/dev/null; then \
+	    otool -L "$$stage/pam_ssoossh.so" | awk 'NR > 1 {print "  " $$1}'; \
+	  fi; \
+	} > "$$stage/BUILDINFO"; \
+	tar -C $(BUILD) -czf $(DIST)/$(DIST_NAME).tar.gz $(DIST_NAME); \
+	rm -rf "$$stage"; \
+	echo "dist: $(DIST)/$(DIST_NAME).tar.gz"; \
+	tar -tzf $(DIST)/$(DIST_NAME).tar.gz | sed 's/^/  /'
+
+# deb, rpm and apk from that tarball, through nfpm and packaging/package.sh,
+# which decides the formats and dependencies from the target name. Needs
+# nfpm: https://github.com/goreleaser/nfpm/releases, or NFPM=/path/to/it.
+NFPM ?= nfpm
+
+packages: dist
+	@NFPM=$(NFPM) packaging/package.sh $(DIST)/$(DIST_NAME).tar.gz $(DIST)
+
 MANDIR ?= /usr/local/share/man
+DOCDIR ?= /usr/local/share/doc/pam_ssoossh
 
 install: $(MODULE)
 	@test -n "$(SECURITYDIR)" || { \
@@ -433,10 +505,15 @@ install: $(MODULE)
 	       "pass SECURITYDIR=<dir>" >&2; exit 1; }
 	install -d $(DESTDIR)$(SECURITYDIR)
 	install -m 0644 $(MODULE) $(DESTDIR)$(SECURITYDIR)/pam_ssoossh.so
-	install -d $(DESTDIR)$(MANDIR)/man8
-	install -m 0644 docs/pam_ssoossh.8 $(DESTDIR)$(MANDIR)/man8/
+	install -d $(DESTDIR)$(MANDIR)/man8 $(DESTDIR)$(MANDIR)/man5
+	install -m 0644 docs/*.8 $(DESTDIR)$(MANDIR)/man8/
+	install -m 0644 docs/*.5 $(DESTDIR)$(MANDIR)/man5/
+	install -d $(DESTDIR)$(DOCDIR)/examples/pam.d
+	install -m 0644 docs/examples/pam.d/* $(DESTDIR)$(DOCDIR)/examples/pam.d/
+	install -m 0644 $(filter-out docs/examples/pam.d,$(wildcard docs/examples/*)) $(DESTDIR)$(DOCDIR)/examples/
 	@echo "installed $(DESTDIR)$(SECURITYDIR)/pam_ssoossh.so"
-	@echo "installed $(DESTDIR)$(MANDIR)/man8/pam_ssoossh.8"
+	@echo "installed man pages under $(DESTDIR)$(MANDIR)"
+	@echo "installed examples under $(DESTDIR)$(DOCDIR)/examples"
 
 clean:
 	rm -rf $(BUILD) pam_ssoossh.so pam_ssoossh.bundle tests/pamtest \
@@ -459,13 +536,17 @@ help:
 	@echo "make e2e        the whole flow against a stub server (needs root)"
 	@echo "make fuzz-run   libFuzzer over every parser that reads network bytes"
 	@echo "make cross      build and gate on every Linux image CI uses"
-	@echo "make lint       actionlint, shellcheck, clang-format, cppcheck"
+	@echo "make lint       actionlint, shellcheck, clang-format, cppcheck, groff"
 	@echo "make ci-local   run the CI workflow locally with nektos/act"
 	@echo "make differential"
 	@echo "                the same scenarios against the Go module too"
 	@echo "make check-stdio"
 	@echo "                assert the module writes to neither stdout nor stderr"
 	@echo "make check-size assert the stripped module is under $(SIZE_LIMIT) bytes"
+	@echo "make check-apple-spi"
+	@echo "                macOS: assert Apple still exports the Ed25519 SPI, and it works"
+	@echo "make dist       package a release artifact under dist/ (see tests/dist-target.sh)"
+	@echo "make packages   deb, rpm and apk from that artifact, with nfpm (see packaging/)"
 	@echo "make install    install into $(if $(SECURITYDIR),$(SECURITYDIR),<no PAM module dir found>)"
 	@echo ""
 	@echo "VERSION=$(VERSION)"

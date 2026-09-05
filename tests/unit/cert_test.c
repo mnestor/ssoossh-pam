@@ -111,13 +111,13 @@ int suite_sshcert(void)
             }
             T_EQ_STR(cert.signature_algo, pairs[i].sig_algo);
 
-#ifdef __APPLE__
-            /* No C-callable Ed25519 on this platform: the answer is
-             * "cannot", reported by name, and never a bare failure. */
-            if (strcmp(pairs[i].sig_algo, "ssh-ed25519") == 0) {
+            /* Where the backend has no Ed25519 -- FIPS mode without EdDSA;
+             * key_test.c checks that is the only reason -- the answer is
+             * "cannot", by name, never a bare failure. */
+            if (!ssoossh_crypto_supports_key(pairs[i].sig_algo) &&
+                strcmp(pairs[i].sig_algo, "ssh-ed25519") == 0) {
                 want = SSOOSSH_VERIFY_UNSUPPORTED;
             }
-#endif
             T_CHECKF(ssoossh_cert_verify(&cert, ca, ca_len) == want,
                      "%s against %s did not give the expected result",
                      pairs[i].cert, pairs[i].ca);

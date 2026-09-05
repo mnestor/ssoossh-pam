@@ -1,0 +1,23 @@
+# pam_ssoossh for su(1).
+#
+# Same shape as sudo: one `auth sufficient` line above the password
+# authentication include. Keep pam_rootok.so first, so root switching to
+# another account still needs no approval, and keep any pam_wheel.so line
+# your distribution ships before this one -- a group restriction on who
+# may su at all should not be bypassable by an approval.
+#
+# Note that su sets PAM_USER to the account being switched *to*. The
+# certificate must therefore be issued for that account, and the principals
+# map entry that matters is the target account's, not the caller's.
+
+auth    sufficient  pam_rootok.so
+# auth  required    pam_wheel.so                 (if your distribution has it)
+auth    sufficient  pam_ssoossh.so server=https://ssoossh.example.com \
+                    trusted-ca-file=/etc/ssoossh/ca.pub \
+                    principals-map=/etc/ssoossh/principals.yaml \
+                    timeout=60s
+
+# then the distribution's include:
+#   Debian, Ubuntu        @include common-auth
+#   RHEL, Alma, Rocky     auth include system-auth
+#   Alpine                auth include base-auth

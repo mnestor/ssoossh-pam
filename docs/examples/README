@@ -1,0 +1,38 @@
+Example configuration for pam_ssoossh
+=====================================
+
+pam.d/        one commented fragment per service: sudo, su, sshd, login.
+              Each is the line (or lines) to add to that service's existing
+              file, not a replacement for it -- distributions differ in
+              how the rest of the stack is spelled, and the comments say
+              where the fragment goes on Debian and Ubuntu, RHEL and its
+              rebuilds, and Alpine.
+
+principals.yaml
+              a principals map to start from. Copy to
+              /etc/ssoossh/principals.yaml and edit; see
+              pam_ssoossh-principals(5) for the format and what the file
+              decides.
+
+The trusted CA file, /etc/ssoossh/ca.pub in every example, is the public
+key ssoosshd signs with, in authorized_keys(5) format -- see
+pam_ssoossh-ca(5). There is no example of it here because its contents
+come from your server.
+
+Before editing any pam.d file:
+
+  * open a second root session and keep it open until the new stack has
+    been tested from a third;
+  * copy the file you are about to change;
+  * never put the module in a shared include (common-auth, system-auth,
+    base-auth): screen lockers and polkit read those too, and an approval
+    prompt nobody can see is a lock-out.
+
+The module goes on one `auth sufficient` line, above the existing password
+line, and nowhere else: it implements auth only. `sufficient` is the
+documented control -- an approval ends the stack, anything else (denied,
+timed out, cancelled, server unreachable) falls through to the password
+prompt, so an ssoossh outage is never a lock-out.
+
+Paths in these files are the conventional ones; nothing in the module
+fixes them.

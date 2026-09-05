@@ -75,13 +75,30 @@ int suite_crypto(void)
     T_CHECK(ssoossh_crypto_supports_key("ssh-rsa"));
     T_CHECK(!ssoossh_crypto_supports_key("ssh-dss"));
     T_CHECK(!ssoossh_crypto_supports_key("sk-ssh-ed25519@openssh.com"));
-#ifdef __APPLE__
-    /* Apple's Ed25519 lives in CryptoKit, which is Swift-only with no C
-     * API. The gap is documented and asserted rather than worked around. */
-    T_CHECK(!ssoossh_crypto_supports_key("ssh-ed25519"));
-#else
-    T_CHECK(ssoossh_crypto_supports_key("ssh-ed25519"));
-#endif
+    /* Ed25519 is expected everywhere, with one excuse: a host whose
+     * OpenSSL is in FIPS mode and whose FIPS module has no EdDSA (RHEL 8).
+     * The backend probes for that and says so; anything else that loses
+     * the algorithm -- on macOS, the Security.framework SPI being absent
+     * or failing its self-test -- is a failure here, with the version line
+     * saying which. */
+    {
+        const char *fips = ssoossh_crypto_fips_state();
+        bool fips_on = fips != NULL && strcmp(fips, "on") == 0;
+
+        if (!ssoossh_crypto_supports_key("ssh-ed25519")) {
+            T_CHECKF(fips_on,
+                     "no ssh-ed25519 support and FIPS mode is not on "
+                     "(crypto: %s, fips: %s)",
+                     ssoossh_crypto_version(), fips != NULL ? fips : "n/a");
+            if (fips_on) {
+                printf("  note: ssh-ed25519 unavailable under FIPS mode "
+                       "(crypto: %s)\n",
+                       ssoossh_crypto_version());
+            }
+        }
+        T_CHECK(fips == NULL || strcmp(fips, "on") == 0 ||
+                strcmp(fips, "off") == 0);
+    }
 
     T_CHECK(ssoossh_crypto_version() != NULL);
     T_CHECK(ssoossh_crypto_version()[0] != '\0');
@@ -219,19 +236,28 @@ int suite_sshkey(void)
                  SSOOSSH_CA_OK);
         T_EQ_INT(cas.count, 1);
 
-        /* The mid-rotation case: a file listing a key this backend cannot
-         * use still authenticates against the one it can. On Linux both
-         * are usable, so the count is two; on macOS the Ed25519 line is
-         * skipped and the ECDSA one carries the file. */
+        /* An Ed25519 and an ECDSA CA in one file. Both are usable
+         * everywhere but under a FIPS configuration without EdDSA, where
+         * the Ed25519 line is skipped and the ECDSA one carries the file
+         * -- which is the mid-rotation case this skip exists for. */
         T_EQ_INT(ssoossh_ca_load("tests/fixtures/cas_mixed.pub", &cas),
                  SSOOSSH_CA_OK);
-#ifdef __APPLE__
+        if (ssoossh_crypto_supports_key("ssh-ed25519")) {
+            T_EQ_INT(cas.count, 2);
+            T_EQ_INT(cas.skipped, 0);
+        } else {
+            T_EQ_INT(cas.count, 1);
+            T_EQ_INT(cas.skipped, 1);
+        }
+
+        /* The mid-rotation case: a file listing a key no backend can use
+         * still authenticates against the one it can. The unusable line
+         * is skipped with a warning naming its type, and the count says
+         * the ECDSA one carried the file. */
+        T_EQ_INT(ssoossh_ca_load("tests/fixtures/cas_unusable.pub", &cas),
+                 SSOOSSH_CA_OK);
         T_EQ_INT(cas.count, 1);
         T_EQ_INT(cas.skipped, 1);
-#else
-        T_EQ_INT(cas.count, 2);
-        T_EQ_INT(cas.skipped, 0);
-#endif
 
         T_EQ_INT(ssoossh_ca_load("tests/fixtures/cas_empty.pub", &cas),
                  SSOOSSH_CA_NONE_USABLE);

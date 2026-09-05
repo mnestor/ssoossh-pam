@@ -38,6 +38,7 @@ static const struct {
     {"crypto", suite_crypto},
     {"sshkey", suite_sshkey},
     {"sshcert", suite_sshcert},
+    {"ed25519", suite_ed25519},
     {"json", suite_json},
     {"sse", suite_sse},
     {"principals-map", suite_principals_map},

@@ -1,18 +1,36 @@
 /* The Security.framework and CommonCrypto backend: macOS.
  *
  * System SSL is not an option here. macOS ships LibreSSL as a dylib, but the
- * SDK exposes no openssl/*.h and no linkable stub, and Apple does not
+ * SDK exposes no OpenSSL headers and no linkable stub, and Apple does not
  * support third-party linking against it. That leaves Homebrew's openssl@3
  * or Apple's own APIs, and Apple's own win: a module that links only what
  * the OS ships has no install-time dependency, no second copy of a TLS stack
  * in a root process, and no third-party CVE surface to track.
  *
- * One capability gap comes with that, and it is documented rather than
- * worked around: SecKey has no Ed25519. Apple's implementation is in
- * CryptoKit, which is Swift-only with no C API. So an ssh-ed25519 CA cannot
- * be used on macOS, ssoossh_crypto_supports_key says so, and a certificate
- * signed by one is refused with an error naming the algorithm rather than a
- * bare signature failure.
+ * Ed25519 comes through a seam in that API rather than a hole in it. The
+ * public SecKey headers name no Ed25519 key type, but Security.framework
+ * has exported one since macOS 14 -- kSecAttrKeyTypeEd25519 and the EdDSA
+ * SecKeyAlgorithm are declared in Apple's private SecItemPriv.h and
+ * SecKeyPriv.h, exported unconditionally on macOS, and implemented over the
+ * same corecrypto call CryptoKit makes. They are SPI: Apple promises nothing
+ * about them. So this file treats them as something to be checked rather
+ * than assumed, on every host, every time:
+ *
+ *   1. Both symbols are looked up with dlsym at first use, never linked.
+ *      The bundle is linked with -bind_at_load, so a hard reference to a
+ *      symbol a future macOS drops would stop the module loading at all --
+ *      inside sudo. A dlsym that fails instead degrades to "ssh-ed25519 is
+ *      unsupported here", which is exactly what this backend did before.
+ *   2. Before the SPI is trusted it has to pass a known-answer self-test:
+ *      an RFC 8032 vector must verify, a corrupted copy must not, and a
+ *      signature with S outside the group order must be refused. An SPI
+ *      that resolves but has changed meaning under the same name is treated
+ *      the same as one that is missing.
+ *   3. Which of those outcomes this host got is in the version line every
+ *      authentication logs, so a fleet can grep for it.
+ *
+ * docs/porting.md has the evidence and the CI that watches Apple's SDKs
+ * and betas for the symbols going away.
  *
  * ==========================================================================
  * THIS FILE HAS NEVER BEEN COMPILED.
@@ -29,16 +47,22 @@
  * call to an undeclared function is an error under the flags this builds
  * with. */
 #define __STDC_WANT_LIB_EXT1__ 1
+/* Before <dlfcn.h>: RTLD_DEFAULT is a Darwin extension, and this file is
+ * compiled under -std=c11 rather than gnu11. */
+#define _DARWIN_C_SOURCE 1
 
 #include <CommonCrypto/CommonDigest.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
 
+#include <dlfcn.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "crypto.h"
 #include "der.h"
+#include "log.h"
 #include "sshwire.h"
 
 struct ssoossh_keypair {
@@ -53,6 +77,235 @@ static CFDataRef data_view(const uint8_t *p, size_t n)
     return CFDataCreateWithBytesNoCopy(kCFAllocatorDefault, p, (CFIndex)n,
                                        kCFAllocatorNull);
 }
+
+/* Verifies sig over msg with an already-built key. Shared by the public
+ * verify and by the Ed25519 self-test, so the two cannot disagree about
+ * what "verified" means. */
+static ssoossh_verify_result verify_with(SecKeyRef key,
+                                         SecKeyAlgorithm algorithm,
+                                         const uint8_t *msg, size_t msg_len,
+                                         const uint8_t *sig, size_t sig_len)
+{
+    CFDataRef signed_data = data_view(msg, msg_len);
+    CFDataRef signature = data_view(sig, sig_len);
+    ssoossh_verify_result result = SSOOSSH_VERIFY_ERROR;
+
+    if (signed_data != NULL && signature != NULL) {
+        CFErrorRef error = NULL;
+
+        if (SecKeyVerifySignature(key, algorithm, signed_data, signature,
+                                  &error)) {
+            result = SSOOSSH_VERIFY_OK;
+        } else {
+            /* SecKeyVerifySignature does not separate "wrong signature"
+             * from "malformed input" in its return, so the error domain
+             * decides. Anything that is not a clean cryptographic failure
+             * is reported as an error rather than as a denial. */
+            result = SSOOSSH_VERIFY_BAD;
+            if (error != NULL) {
+                CFRelease(error);
+            }
+        }
+    }
+
+    if (signature != NULL) {
+        CFRelease(signature);
+    }
+    if (signed_data != NULL) {
+        CFRelease(signed_data);
+    }
+    return result;
+}
+
+/* ------------------------------------------------------------------------
+ * Ed25519 through the SPI.
+ * ------------------------------------------------------------------------ */
+
+/* The two names, spelled once. tests/apple-spi-check.sh greps Apple's SDKs
+ * for the same two strings, with the Mach-O underscore. */
+#define ED25519_KEY_TYPE_SYM "kSecAttrKeyTypeEd25519"
+#define ED25519_ALGORITHM_SYM                                                  \
+    "kSecKeyAlgorithmEdDSASignatureMessageCurve25519SHA512"
+
+typedef enum {
+    /* Resolved and self-tested. */
+    ED25519_USABLE,
+    /* One of the symbols is not exported by this macOS. */
+    ED25519_ABSENT,
+    /* Resolved, but the known-answer test failed: same name, different
+     * behaviour. Refused. */
+    ED25519_SELFTEST_FAILED,
+} ed25519_state;
+
+static struct {
+    ed25519_state state;
+    CFStringRef key_type;
+    SecKeyAlgorithm algorithm;
+} ed25519 = {ED25519_ABSENT, NULL, NULL};
+
+static pthread_once_t ed25519_once = PTHREAD_ONCE_INIT;
+
+/* dlsym on an exported CF constant gives the address of the variable, not
+ * its value: one more dereference, and a NULL at either level is "absent". */
+static bool resolve_constant(const char *name, const void **out)
+{
+    const void *const *slot = dlsym(RTLD_DEFAULT, name);
+
+    if (slot == NULL || *slot == NULL) {
+        return false;
+    }
+    *out = *slot;
+    return true;
+}
+
+/* A SecKeyRef from the 32 raw bytes of an Ed25519 public key, which is
+ * what both the SSH blob and the SPI's kSecKeyEncodingBytes carry. */
+static SecKeyRef ed25519_key(const uint8_t *pk, size_t pk_len)
+{
+    CFMutableDictionaryRef attrs;
+    CFDataRef material;
+    SecKeyRef key = NULL;
+
+    if (pk_len != 32 || ed25519.key_type == NULL) {
+        return NULL;
+    }
+    attrs = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
+                                      &kCFTypeDictionaryKeyCallBacks,
+                                      &kCFTypeDictionaryValueCallBacks);
+    if (attrs == NULL) {
+        return NULL;
+    }
+    CFDictionarySetValue(attrs, kSecAttrKeyType, ed25519.key_type);
+    CFDictionarySetValue(attrs, kSecAttrKeyClass, kSecAttrKeyClassPublic);
+    material = data_view(pk, pk_len);
+    if (material != NULL) {
+        key = SecKeyCreateWithData(material, attrs, NULL);
+        CFRelease(material);
+    }
+    CFRelease(attrs);
+    return key;
+}
+
+static ssoossh_verify_result ed25519_verify_raw(const uint8_t *pk,
+                                                const uint8_t *msg,
+                                                size_t msg_len,
+                                                const uint8_t *sig)
+{
+    SecKeyRef key = ed25519_key(pk, 32);
+    ssoossh_verify_result result;
+
+    if (key == NULL) {
+        return SSOOSSH_VERIFY_ERROR;
+    }
+    result = verify_with(key, ed25519.algorithm, msg, msg_len, sig, 64);
+    CFRelease(key);
+    return result;
+}
+
+/* The known-answer test. Three vectors, three required outcomes:
+ *
+ *   RFC 8032 §7.1 TEST 3, as published                -> OK
+ *   the same with one signature byte flipped          -> BAD
+ *   a signature whose S is not below the group order  -> BAD
+ *
+ * The third is the one that catches a quiet change of semantics: S >= L
+ * is the malleability check every serious verifier makes and RFC 8032
+ * requires, and the vector is case 6 of the ed25519-speccheck suite --
+ * the same suite tests/unit/ed25519_test.c runs in full on every platform.
+ * Returns NULL on success, or the name of the check that failed. */
+static const char *ed25519_selftest(void)
+{
+    /* RFC 8032 §7.1 TEST 3. */
+    static const uint8_t pk[32] = {
+        0xfc, 0x51, 0xcd, 0x8e, 0x62, 0x18, 0xa1, 0xa3, 0x8d, 0xa4, 0x7e,
+        0xd0, 0x02, 0x30, 0xf0, 0x58, 0x08, 0x16, 0xed, 0x13, 0xba, 0x33,
+        0x03, 0xac, 0x5d, 0xeb, 0x91, 0x15, 0x48, 0x90, 0x80, 0x25};
+    static const uint8_t msg[2] = {0xaf, 0x82};
+    static const uint8_t sig[64] = {
+        0x62, 0x91, 0xd6, 0x57, 0xde, 0xec, 0x24, 0x02, 0x48, 0x27, 0xe6,
+        0x9c, 0x3a, 0xbe, 0x01, 0xa3, 0x0c, 0xe5, 0x48, 0xa2, 0x84, 0x74,
+        0x3a, 0x44, 0x5e, 0x36, 0x80, 0xd7, 0xdb, 0x5a, 0xc3, 0xac, 0x18,
+        0xff, 0x9b, 0x53, 0x8d, 0x16, 0xf2, 0x90, 0xae, 0x67, 0xf7, 0x60,
+        0x98, 0x4d, 0xc6, 0x59, 0x4a, 0x7c, 0x15, 0xe9, 0x71, 0x6e, 0xd2,
+        0x8d, 0xc0, 0x27, 0xbe, 0xce, 0xea, 0x1e, 0xc4, 0x0a};
+    /* ed25519-speccheck case 6: S >= L. */
+    static const uint8_t big_s_pk[32] = {
+        0x44, 0x2a, 0xad, 0x9f, 0x08, 0x9a, 0xd9, 0xe1, 0x46, 0x47, 0xb1,
+        0xef, 0x90, 0x99, 0xa1, 0xff, 0x47, 0x98, 0xd7, 0x85, 0x89, 0xe6,
+        0x6f, 0x28, 0xec, 0xa6, 0x9c, 0x11, 0xf5, 0x82, 0xa6, 0x23};
+    static const uint8_t big_s_msg[32] = {
+        0x85, 0xe2, 0x41, 0xa0, 0x7d, 0x14, 0x8b, 0x41, 0xe4, 0x7d, 0x62,
+        0xc6, 0x3f, 0x83, 0x0d, 0xc7, 0xa6, 0x85, 0x1a, 0x0b, 0x1f, 0x33,
+        0xae, 0x4b, 0xb2, 0xf5, 0x07, 0xfb, 0x6c, 0xff, 0xec, 0x40};
+    static const uint8_t big_s_sig[64] = {
+        0xe9, 0x6f, 0x66, 0xbe, 0x97, 0x6d, 0x82, 0xe6, 0x01, 0x50, 0xba,
+        0xec, 0xff, 0x99, 0x06, 0x68, 0x4a, 0xeb, 0xb1, 0xef, 0x18, 0x1f,
+        0x67, 0xa7, 0x18, 0x9a, 0xc7, 0x8e, 0xa2, 0x3b, 0x6c, 0x0e, 0x54,
+        0x7f, 0x76, 0x90, 0xa0, 0xe2, 0xdd, 0xcd, 0x04, 0xd8, 0x7d, 0xbc,
+        0x34, 0x90, 0xdc, 0x19, 0xb3, 0xb3, 0x05, 0x2f, 0x7f, 0xf0, 0x53,
+        0x8c, 0xb6, 0x8a, 0xfb, 0x36, 0x9b, 0xa3, 0xa5, 0x14};
+    uint8_t flipped[64];
+
+    if (ed25519_verify_raw(pk, msg, sizeof(msg), sig) != SSOOSSH_VERIFY_OK) {
+        return "RFC 8032 vector did not verify";
+    }
+    memcpy(flipped, sig, sizeof(flipped));
+    flipped[10] ^= 0x01;
+    if (ed25519_verify_raw(pk, msg, sizeof(msg), flipped) !=
+        SSOOSSH_VERIFY_BAD) {
+        return "corrupted signature was not refused";
+    }
+    if (ed25519_verify_raw(big_s_pk, big_s_msg, sizeof(big_s_msg), big_s_sig) !=
+        SSOOSSH_VERIFY_BAD) {
+        return "signature with S >= L was not refused";
+    }
+    return NULL;
+}
+
+static void ed25519_init(void)
+{
+    const void *key_type = NULL, *algorithm = NULL;
+    const char *failed;
+
+    if (!resolve_constant(ED25519_KEY_TYPE_SYM, &key_type)) {
+        ssoossh_warnf("Ed25519: Security.framework on this macOS does not "
+                      "export %s; ssh-ed25519 CAs cannot be used here",
+                      ED25519_KEY_TYPE_SYM);
+        return;
+    }
+    if (!resolve_constant(ED25519_ALGORITHM_SYM, &algorithm)) {
+        ssoossh_warnf("Ed25519: Security.framework on this macOS does not "
+                      "export %s; ssh-ed25519 CAs cannot be used here",
+                      ED25519_ALGORITHM_SYM);
+        return;
+    }
+    ed25519.key_type = key_type;
+    ed25519.algorithm = algorithm;
+
+    failed = ed25519_selftest();
+    if (failed != NULL) {
+        /* Same names, different behaviour. Not trusted: the constants are
+         * cleared so nothing below can reach them by accident. */
+        ed25519.key_type = NULL;
+        ed25519.algorithm = NULL;
+        ed25519.state = ED25519_SELFTEST_FAILED;
+        ssoossh_errf("Ed25519: Security.framework SPI failed its self-test "
+                     "(%s); refusing to use it, ssh-ed25519 CAs cannot be "
+                     "used here",
+                     failed);
+        return;
+    }
+    ed25519.state = ED25519_USABLE;
+    ssoossh_debugf("Ed25519: Security.framework SPI resolved and self-tested");
+}
+
+static bool ed25519_usable(void)
+{
+    (void)pthread_once(&ed25519_once, ed25519_init);
+    return ed25519.state == ED25519_USABLE;
+}
+
+/* ------------------------------------------------------------------------ */
 
 bool ssoossh_crypto_keygen(ssoossh_keypair **out)
 {
@@ -161,7 +414,11 @@ bool ssoossh_crypto_public_point(const ssoossh_keypair *kp, uint8_t *out,
 
 bool ssoossh_crypto_supports_key(const char *key_algo)
 {
-    /* ssh-ed25519 is absent, and that absence is the capability matrix. */
+    /* ssh-ed25519 is conditional on this host, and the condition is
+     * decided once, by the resolve-and-self-test above. */
+    if (strcmp(key_algo, "ssh-ed25519") == 0) {
+        return ed25519_usable();
+    }
     return strcmp(key_algo, "ssh-rsa") == 0 ||
            strcmp(key_algo, "ecdsa-sha2-nistp256") == 0 ||
            strcmp(key_algo, "ecdsa-sha2-nistp384") == 0 ||
@@ -171,9 +428,9 @@ bool ssoossh_crypto_supports_key(const char *key_algo)
 /* Builds a SecKeyRef from an SSH public key blob.
  *
  * SecKeyCreateWithData takes the raw key material, not a
- * SubjectPublicKeyInfo: the X9.63 point for EC, and a bare PKCS#1
- * RSAPublicKey for RSA. That is why der.h exposes the PKCS#1 encoder
- * separately from the SPKI one the OpenSSL backend uses. */
+ * SubjectPublicKeyInfo: the X9.63 point for EC, a bare PKCS#1 RSAPublicKey
+ * for RSA, and the 32 raw bytes for Ed25519. That is why der.h exposes the
+ * PKCS#1 encoder separately from the SPKI one the OpenSSL backend uses. */
 static SecKeyRef key_from_ssh_blob(const uint8_t *blob, size_t blob_len,
                                    char *type_out, size_t type_cap,
                                    uint8_t *scratch, size_t scratch_cap)
@@ -194,6 +451,19 @@ static SecKeyRef key_from_ssh_blob(const uint8_t *blob, size_t blob_len,
     }
     memcpy(type_out, type, type_len);
     type_out[type_len] = '\0';
+
+    if (strcmp(type_out, "ssh-ed25519") == 0) {
+        /* One string: the 32-byte point. The SPI path builds its own
+         * dictionary, and returns NULL when this host has no usable SPI,
+         * which the caller reports as UNSUPPORTED by the type name. */
+        if (!ssh_rd_str(&r, &a, &a_len) || !ssh_rd_done(&r) || a_len != 32) {
+            return NULL;
+        }
+        if (!ed25519_usable()) {
+            return NULL;
+        }
+        return ed25519_key(a, a_len);
+    }
 
     attrs = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
                                       &kCFTypeDictionaryKeyCallBacks,
@@ -258,7 +528,6 @@ static SecKeyRef key_from_ssh_blob(const uint8_t *blob, size_t blob_len,
         }
         material = data_view(b, b_len);
     } else {
-        /* ssh-ed25519 lands here, which is the documented gap. */
         CFRelease(attrs);
         return NULL;
     }
@@ -278,10 +547,19 @@ static SecKeyRef key_from_ssh_blob(const uint8_t *blob, size_t blob_len,
  * SecKey algorithm verifies it.
  *
  * ssh-rsa is absent for the same reason it is absent from the OpenSSL
- * backend: that name means RSA with SHA-1, and it is refused by policy. */
+ * backend: that name means RSA with SHA-1, and it is refused by policy.
+ * ssh-ed25519 is present only when the SPI resolved and self-tested. */
 static bool sig_algo_info(const char *sig_algo, const char **key_type,
                           SecKeyAlgorithm *algorithm)
 {
+    if (strcmp(sig_algo, "ssh-ed25519") == 0) {
+        if (!ed25519_usable()) {
+            return false;
+        }
+        *key_type = "ssh-ed25519";
+        *algorithm = ed25519.algorithm;
+        return true;
+    }
     if (strcmp(sig_algo, "rsa-sha2-256") == 0) {
         *key_type = "ssh-rsa";
         *algorithm = kSecKeyAlgorithmRSASignatureMessagePKCS1v15SHA256;
@@ -322,8 +600,7 @@ ssoossh_verify_result ssoossh_crypto_verify(const char *sig_algo,
     const char *want_key_type = NULL;
     SecKeyAlgorithm algorithm = NULL;
     SecKeyRef key = NULL;
-    CFDataRef signed_data = NULL, signature = NULL;
-    ssoossh_verify_result result = SSOOSSH_VERIFY_ERROR;
+    ssoossh_verify_result result;
 
     if (!sig_algo_info(sig_algo, &want_key_type, &algorithm)) {
         return SSOOSSH_VERIFY_UNSUPPORTED;
@@ -333,8 +610,10 @@ ssoossh_verify_result ssoossh_crypto_verify(const char *sig_algo,
                             scratch, sizeof(scratch));
     if (key == NULL) {
         /* Distinguish "this backend cannot" from "that is not a key", so
-         * the operator is told which. */
-        if (strcmp(key_type, "ssh-ed25519") == 0) {
+         * the operator is told which. An Ed25519 blob that parsed but
+         * found no usable SPI lands here; one that did not parse is an
+         * error like any other malformed key. */
+        if (strcmp(key_type, "ssh-ed25519") == 0 && !ed25519_usable()) {
             return SSOOSSH_VERIFY_UNSUPPORTED;
         }
         return SSOOSSH_VERIFY_ERROR;
@@ -361,34 +640,15 @@ ssoossh_verify_result ssoossh_crypto_verify(const char *sig_algo,
         }
         sig = der_sig;
         sig_len = n;
+    } else if (strcmp(sig_algo, "ssh-ed25519") == 0 && sig_len != 64) {
+        /* Sixty-four raw bytes, exactly, as on the OpenSSL backend. The
+         * SPI would refuse it too, but a length error is malformed input,
+         * not a failed signature, and the distinction matters. */
+        CFRelease(key);
+        return SSOOSSH_VERIFY_ERROR;
     }
 
-    signed_data = data_view(msg, msg_len);
-    signature = data_view(sig, sig_len);
-    if (signed_data != NULL && signature != NULL) {
-        CFErrorRef error = NULL;
-
-        if (SecKeyVerifySignature(key, algorithm, signed_data, signature,
-                                  &error)) {
-            result = SSOOSSH_VERIFY_OK;
-        } else {
-            /* SecKeyVerifySignature does not separate "wrong signature"
-             * from "malformed input" in its return, so the error domain
-             * decides. Anything that is not a clean cryptographic failure
-             * is reported as an error rather than as a denial. */
-            result = SSOOSSH_VERIFY_BAD;
-            if (error != NULL) {
-                CFRelease(error);
-            }
-        }
-    }
-
-    if (signature != NULL) {
-        CFRelease(signature);
-    }
-    if (signed_data != NULL) {
-        CFRelease(signed_data);
-    }
+    result = verify_with(key, algorithm, msg, msg_len, sig, sig_len);
     CFRelease(key);
     return result;
 }
@@ -419,12 +679,29 @@ void ssoossh_crypto_wipe(void *p, size_t n)
 #endif
 }
 
+const char *ssoossh_crypto_fips_state(void)
+{
+    /* macOS has no FIPS switch: Apple's corecrypto modules are validated
+     * as shipped and there is no other configuration to be in. Nothing to
+     * report, so the version line carries no field. */
+    return NULL;
+}
+
 const char *ssoossh_crypto_version(void)
 {
     /* Security.framework and CommonCrypto ship with the OS and carry no
-     * independently queryable version, so the backend is named instead. An
-     * operator grepping syslog for "which crypto is in sudo here" gets an
-     * answer either way; on this platform the answer is "whatever this
-     * macOS is". */
-    return "Security.framework";
+     * independently queryable version, so the backend is named instead,
+     * together with what became of the Ed25519 SPI on this host. That is
+     * the line every authentication logs, so "which Macs lost Ed25519
+     * after the update" is a grep of syslog rather than a question. */
+    (void)ed25519_usable();
+    switch (ed25519.state) {
+    case ED25519_USABLE:
+        return "Security.framework (Ed25519 SPI ok)";
+    case ED25519_SELFTEST_FAILED:
+        return "Security.framework (Ed25519 SPI FAILED self-test)";
+    case ED25519_ABSENT:
+    default:
+        return "Security.framework (no Ed25519 SPI)";
+    }
 }

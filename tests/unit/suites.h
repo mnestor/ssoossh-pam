@@ -17,6 +17,7 @@ int suite_der(void);
 int suite_crypto(void);
 int suite_sshkey(void);
 int suite_sshcert(void);
+int suite_ed25519(void);
 int suite_json(void);
 int suite_sse(void);
 int suite_principals_map(void);

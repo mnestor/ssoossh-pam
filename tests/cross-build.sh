@@ -36,6 +36,7 @@ declare -A IMAGES=(
     [debian12]="debian:12|apt-get update -qq && apt-get install -y -qq --no-install-recommends build-essential pkg-config libssl-dev libcurl4-openssl-dev libpam0g-dev openssh-client"
     [alpine]="alpine:3|apk add --no-cache build-base pkgconf openssl-dev curl-dev linux-pam-dev compiler-rt openssh-keygen"
     [el8]="almalinux:8|dnf install -y -q gcc make pkgconf-pkg-config openssl-devel libcurl-devel pam-devel libasan libubsan openssh-clients"
+    [el9]="almalinux:9|dnf install -y -q gcc make pkgconf-pkg-config openssl-devel libcurl-devel pam-devel libasan libubsan openssh-clients"
 )
 
 targets=("${@:-}")

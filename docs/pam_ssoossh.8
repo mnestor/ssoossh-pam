@@ -1,22 +1,24 @@
 .\" Manual page for pam_ssoossh.
 .\" Rendered with: man -l docs/pam_ssoossh.8
-.TH PAM_SSOOSSH 8 "2026-09-04" "pam_ssoossh" "System Manager's Manual"
+.\" Checked with:  mandoc -T lint docs/pam_ssoossh.8
+.TH PAM_SSOOSSH 8 "2026-09-05" "pam_ssoossh" "System Manager's Manual"
 .SH NAME
 pam_ssoossh \- authenticate by having a human approve a certificate request
 .SH SYNOPSIS
 .nf
 .B auth sufficient pam_ssoossh.so
 .RI "server=" URL
-.RI "trusted-ca-file=" PATH
+.RI "trusted\-ca\-file=" PATH
 .RI [ options ]
 .fi
 .SH DESCRIPTION
 .B pam_ssoossh
-authenticates a local account by generating a single-use SSH keypair,
+authenticates a local account by generating a single\-use SSH keypair,
 asking
 .BR ssoosshd (8)
 to certify it, showing the person at the terminal how to approve the
-request, and validating the certificate that comes back.
+request, waiting for a human to approve it, and validating the certificate
+that comes back against a set of trusted certificate authorities.
 .PP
 It implements the
 .B auth
@@ -25,20 +27,90 @@ stack only, through
 and
 .BR pam_sm_setcred .
 The latter establishes nothing: the certificate is consumed during
-authentication and never installed into the session.
+authentication and never installed into the session. Do not list the
+module on
+.BR account ", " password " or " session
+lines; it has no code for them.
 .PP
-Two flows exist and
+It is a reimplementation in C of the Go module of the same name in the
+ssoossh repository, and reads the same
+.BR pam.d (5)
+lines. A stanza that works with the Go module keeps working here, with the
+differences named in
+.B COMPATIBILITY
+below.
+.SH MODES
+Two flows exist, and
 .B mode=auto
-picks between them per login.
-The
-.I browser
-flow prints an approval URL, which suits any terminal someone can click or
-copy from.
-The
-.I console
-flow prints a short code and a QR code instead, for a machine with no
-browser in front of it \(em a virtual console, a serial line, a BMC viewer.
+picks between them for every login.
+.SS The browser flow
+On a machine with a browser, or in a session that came from one, the
+module prints one message through the PAM conversation and waits:
+.PP
+.RS
+.nf
+Approve this request in your browser:
+https://ssoossh.example.com/approve/6f1c0a5e\-1f2b\-4c3d\-8e9f\-0a1b2c3d4e5f
+.fi
+.RE
+.PP
+Nothing is read back. The login proceeds when someone with the right to
+approve it does so in the browser, or fails when they deny it, when
+.B timeout
+elapses, or when the person at the terminal presses Ctrl\-C.
+.SS The console flow
+On a machine with no browser in front of it \(em a virtual console, a serial
+line, a hypervisor or BMC console \(em an approval URL is a link nobody can
+follow. The console flow prints a short code and, where it fits, a QR code
+carrying the complete verification URL, and the approver carries either to a
+device that does have a browser:
+.PP
+.RS
+.nf
+Approve this login from a device with a browser.
+
+  Go to:  https://ssoossh.example.com/console
+  Code:   K7M4\-QP2X
+
+  \[u2588]\[u2588]\[u2588]\[u2588]\[u2588]\[u2588]\[u2588]\[u2588]\[u2588]\[u2588]\[u2588]\[u2588]\[u2588]\[u2588]\[u2588]\[u2588]\[u2588]
+  \[u2588]\[u2588] \[u2584]\[u2584]\[u2584]\[u2584]\[u2584] \[u2588] \[u2584]\[u2580] \[u2588] \[u2584]\[u2584]\[u2584]\[u2584]\[u2584] \[u2588]\[u2588]
+  ...
+.fi
+.RE
+.PP
+The code is Crockford base32 in two groups; the QR code is drawn from Unicode
+half\-block characters and needs a terminal font that has them. It is
+omitted, and the code stands alone, when the message would not fit.
+.SS Which flow runs
+.B mode=auto
+chooses the console flow when
+.B PAM_RHOST
+is empty \(em nothing came in over the network \(em and
+.B PAM_TTY
+names a physical terminal: a Linux or FreeBSD virtual console, a serial
+line, a hypervisor console, or
+.B /dev/console
+itself. Everything else gets the browser flow, and each exclusion is
+deliberate. A pseudo\-terminal
+.RI ( pts/N )
+is a terminal emulator or an SSH session, where a browser is a keystroke
+away. An unset
+.B PAM_TTY
+is a cron job or a script, with no human at all. A set
+.B PAM_RHOST
+means the person is at their own machine, which has a browser, however
+console\-like the terminal on this end looks.
+.PP
+The decision is therefore per login rather than per host: the same
+.BR pam.d (5)
+line does the right thing for a serial console and for an SSH session.
 .SH OPTIONS
+Arguments are
+.IB key = value
+words on the
+.BR pam.d (5)
+line. A value containing spaces uses libpam's bracket form,
+.IR key=[a\ value] .
 .TP
 .BI server= URL
 Required. The
@@ -47,78 +119,79 @@ base URL. A missing scheme becomes
 .BR https:// ,
 and trailing slashes are trimmed. Absent or empty is
 .BR PAM_USER_UNKNOWN ,
-returned before any key is generated or any socket opened.
+returned before any key is generated or any socket opened. Longer than
+512 bytes is
+.BR PAM_NO_MODULE_DATA .
 .TP
-.BI trusted-ca-file= PATH
+.BI trusted\-ca\-file= PATH
 Required. CA public keys in
 .BR authorized_keys (5)
-format, one per line, so a deployment can rotate CAs without a coordinated
-restart. A key of an algorithm this build cannot verify is skipped with a
-warning naming it and the line; if none usable remains, that is
+format, one per line, read on every attempt so a deployment can rotate CAs
+without a restart. See
+.BR pam_ssoossh\-ca (5).
+A key of an algorithm this build cannot verify is skipped with a warning
+naming it and the line; if none usable remains, that is
 .BR PAM_NO_MODULE_DATA ,
 the same code an unreadable file produces.
 .TP
-.BI principals-map= PATH
-Optional. Maps a local account to the certificate principals allowed to
-assume it \(em see
-.B PRINCIPALS MAP
-below. A map that is configured but fails to load logs a warning and falls
-back to requiring the certificate to carry the exact account name. It does
-not fail the login: a typo'd path degrades to the stricter default rather
-than locking every account out of the host.
+.BI principals\-map= PATH
+Optional in the module, needed in practice. Maps a local account to the
+certificate principals allowed to assume it \(em see
+.BR pam_ssoossh\-principals (5).
+A map that is configured but fails to load logs a warning and falls back
+to requiring the certificate to carry the exact account name; it does not
+fail the login, so a mistyped path degrades to the stricter default rather
+than locking every account out of the host. A map that loads is
+authoritative: an account with no entry in it is denied.
 .TP
-.BI skew-tolerance= DURATION
+.BI skew\-tolerance= DURATION
 Default
 .BR 2s .
 Applied symmetrically to both ends of the certificate's validity window, to
-absorb clock skew between the issuing server and this host.
+absorb clock skew between the issuing server and this host. Prefer keeping
+clocks synchronised to widening this: a wider window is also a longer life
+for a certificate that leaks.
 .TP
 .BI timeout= DURATION
 Default
 .BR 60s .
 Bounds the whole attempt, not only the waiting half. The server's own
-.B expires_at
-bounds it further when it is the earlier of the two.
+expiry for the request bounds it further when that is the earlier of the
+two.
 .TP
-.B insecure-skip-verify
+.BR insecure\-skip\-verify [ =true | =false ]
 Default off. Disables TLS verification of the
 .B ssoosshd
 certificate. With this on, nothing the server says is authenticated,
 including the URL that reaches the terminal; the module logs a warning on
-every attempt that uses it.
+every attempt that uses it. A value that is neither
+.BR true " nor " false
+is treated as
+.BR false .
 .TP
 .BI mode= auto | sudo | console
 Default
-.BR auto .
-.B auto
-runs the console flow when
-.B PAM_RHOST
-is empty and
-.B PAM_TTY
-names a physical terminal \(em a virtual console, a serial line, a
-hypervisor console, or
-.B /dev/console
-\(em and the browser flow otherwise. A pseudo-terminal is a terminal
-emulator or an SSH session, where a browser is a keystroke away, so it is
-not a console. An unset
-.B PAM_TTY
-is a cron job or a script and is not one either.
-.B sudo
-and
-.B console
-force a flow. An unrecognized value is
+.BR auto ,
+described under
+.B MODES
+above.
+.BR sudo " and " console
+force a flow. An unrecognised value is
 .BR PAM_NO_MODULE_DATA ,
-never a silent fall back.
-Console mode is compiled in on Linux and FreeBSD only; on macOS,
+never a silent fall back. Console mode is compiled in on Linux and FreeBSD
+only; on macOS
 .B mode=console
-is refused and
+is refused with the same code and
 .B mode=auto
-uses the browser flow.
+always uses the browser flow.
 .TP
-.B debug
-Default off. Logs the decision for each of the four checks at
+.BR debug [ = VALUE ]
+Default off. Logs the decision for each of the four checks, the URL sent
+to the terminal, and the request context at
 .BR LOG_DEBUG .
-The legacy value
+The bare word, or any value other than
+.BR false ,
+turns it on. The legacy value
 .B debug=stdout
 is accepted and treated as plain
 .BR debug :
@@ -133,6 +206,38 @@ grammar \(em
 \(em because that is what existing
 .BR pam.d (5)
 lines already contain. An unparseable duration is silently the default.
+An unknown argument is ignored.
+.SH THE FOUR CHECKS
+Run in order on the certificate the server issues; every failure produces
+.B PAM_AUTH_ERR
+and logs its reason at
+.BR LOG_ERR .
+.IP 1. 4
+.B CA signature
+\(em the certificate is cryptographically signed by a key in
+.BR trusted\-ca\-file .
+Not a string comparison against that file's contents.
+.IP 2. 4
+.B Key binding
+\(em the certificate's public key is the one generated for this attempt.
+Without it, checks 1, 3 and 4 passing together would accept any CA\-signed
+certificate carrying the right principal, including one issued to somebody
+else's keypair.
+.IP 3. 4
+.B Principal
+\(em the certificate's principals authorise this local account, through
+the principals map when one is loaded, and by exact name otherwise.
+.IP 4. 4
+.B Validity window
+\(em now is within
+.RB [ valid_after ", " valid_before ]
+plus or minus
+.BR skew\-tolerance .
+.PP
+The per\-attempt keypair is always ECDSA P\-384, which every platform's
+crypto supports, so only the CA side is ever constrained by
+.B CERTIFICATE ALGORITHMS
+below.
 .SH RETURN VALUES
 .TP
 .B PAM_SUCCESS
@@ -145,22 +250,24 @@ failed, or
 is not configured.
 .TP
 .B PAM_NO_MODULE_DATA
-.I argv
-could not be read, the trusted CA file is missing or unusable, or an
-argument is malformed.
+The argument vector could not be read, an argument is malformed or too
+long, or the trusted CA file is missing or holds no usable key.
 .TP
 .B PAM_AUTH_ERR
-Denied, expired, failed to issue, unparseable, or any check failing. Also a
+The request resolved and the answer was no: denied, expired, the server
+could not issue, the certificate did not parse, or a check failed. Also a
 timeout.
 .TP
 .B PAM_IGNORE
-The person pressed Ctrl-C at the approval prompt. The module contributes
+The person pressed Ctrl\-C at the approval prompt. The module contributes
 nothing and the stack continues to whatever follows it.
 .TP
 .B PAM_AUTHINFO_UNAVAIL
 .B ssoosshd
-could not be reached. This lets the stack fall through, so an ssoossh
-outage does not become a
+could not be reached, or answered with something that was not an answer.
+This lets a
+.B sufficient
+stack fall through, so an ssoossh outage does not become a
 .BR sudo (8)
 outage on every host. A server that answered and said no is
 .B PAM_AUTH_ERR
@@ -168,49 +275,71 @@ instead.
 .TP
 .B PAM_ABORT
 The keypair or the HTTP client could not be constructed.
-.SH THE FOUR CHECKS
-Run in order; every failure produces
-.B PAM_AUTH_ERR
-and logs its reason at
-.BR LOG_ERR .
-.IP 1. 4
-.B CA signature
-\(em the certificate is cryptographically signed by a key in
-.BR trusted-ca-file .
-Not a string comparison against that file's contents.
-.IP 2. 4
-.B Key binding
-\(em the certificate's public key is the one generated for this attempt.
-Without it, checks 1, 3 and 4 passing together would accept any CA-signed
-certificate carrying the right principal, including one issued to somebody
-else's keypair.
-.IP 3. 4
-.B Principal
-\(em the certificate's principals authorize this local account.
-.IP 4. 4
-.B Validity window
-\(em now is within
-.RB [ valid_after ", " valid_before ]
-plus or minus
-.BR skew-tolerance .
-.SH PRINCIPALS MAP
-A fixed subset of YAML, parsed without a YAML library:
+.SH SERVICES
+Which
+.BR pam.d (5)
+services to put the module in is an operator's decision, and the packages
+ship a commented example for each of the usual ones under
+.I examples/pam.d
+(see
+.BR FILES ).
+The shape is always the same: one
+.B auth sufficient
+line above the service's existing password authentication.
+.TP
+.B sudo
+The original use. The browser flow, since a
+.BR sudo (8)
+session has a terminal emulator or SSH session behind it.
+.TP
+.B su
+The same, after the
+.B pam_rootok.so
+line that lets root switch without authenticating.
+.TP
+.B sshd
+Works through keyboard\-interactive authentication, which is how
+.BR sshd (8)
+runs PAM and relays the module's message to the client. Needs
+.B UsePAM yes
+and
+.B KbdInteractiveAuthentication yes
+in
+.BR sshd_config (5).
+Always the browser flow, since
+.B PAM_RHOST
+is set. Public\-key logins are unaffected unless
+.B AuthenticationMethods
+requires both.
+.TP
+.BR login ", " getty
+A console login, so
+.B mode=auto
+runs the console flow. Consider gating the line with
+.B pam_succeed_if.so
+so that root, or accounts outside a group, never see it, and leave
+.B pam_securetty.so
+where it is.
 .PP
-.RS
-.nf
-# who may become each account
-alice:
-  - alice
-  - admin
-bob: [bob, ops]
-carol:          # null and ~ mean the same: nobody
-.fi
-.RE
+Do not add the module to a shared include such as
+.IR common\-auth ", " system\-auth " or " base\-auth :
+screen lockers, display managers and
+.BR polkit (8)
+read those too, and an approval prompt that cannot be seen is a lock\-out.
 .PP
-An account with no entry is never allowed, even when a certificate
-principal happens to match its name. Quoted values have their quotes
-stripped; escapes are not interpreted and a value containing one is
-rejected rather than guessed at.
+Test from a second, already\-open root session, never from the one whose
+service is being edited, and keep a copy of the file being changed.
+.SH PRINCIPALS
+A certificate's principals are decided by
+.BR ssoosshd ,
+and for a PAM request they carry the
+.I approver's
+identity \(em the username of the person who approved, and any other
+accounts the server has recorded them as holding \(em never the local
+account name that was asked for. A host whose local accounts are not
+spelled exactly as the identity provider spells its users therefore needs a
+principals map for anyone to log in at all. See
+.BR pam_ssoossh\-principals (5).
 .SH CERTIFICATE ALGORITHMS
 Which CA key types work is decided by the crypto the platform ships.
 Anything unsupported fails with an error naming the algorithm, never with a
@@ -223,27 +352,94 @@ CA key type@Linux, FreeBSD@macOS
 _
 ecdsa\-sha2\-nistp256/384/521@yes@yes
 rsa\-sha2\-256, rsa\-sha2\-512@yes@yes
-ssh\-ed25519@yes@no
+ssh\-ed25519@yes@yes (macOS 14+)
 ssh\-rsa (SHA\-1)@refused@refused
 .TE
 .PP
-.B ssh-rsa
+.B ssh\-rsa
 names RSA with SHA\-1, which OpenSSH has disabled by default since 8.8. It
-is refused by policy on every platform. macOS has no C\-callable Ed25519 \(em
-Apple's is in CryptoKit, which is Swift\-only \(em so an Ed25519 CA cannot be
-used there.
+is refused by policy on every platform.
 .PP
-The per\-attempt keypair is always ECDSA P\-384, which every backend
-supports, so the table above only ever constrains the CA side.
-.SH FILES
-.TP
-.I /etc/pam.d/*
-The service stanzas that load this module.
-.TP
-.I /lib/*/security/pam_ssoossh.so
-The module, wherever
-.BR libpam (8)
-looks on this platform.
+On macOS, Ed25519 is verified through a Security.framework interface Apple
+exports but does not document. The module resolves it at runtime, self\-tests
+it before use, and names the outcome in the version line it logs on every
+authentication:
+.B crypto: Security.framework (Ed25519 SPI ok)
+when it works, and
+.B (no Ed25519 SPI)
+or
+.B (Ed25519 SPI FAILED self\-test)
+when it does not \(em in which case an
+.B ssh\-ed25519
+CA is skipped with a warning naming its type, and every other CA type still
+works.
+.SH FIPS MODE
+The module makes no cryptographic choices a FIPS policy could object to,
+and defers the ones it cannot make to the host. The per\-attempt keypair is
+ECDSA P\-384 on every platform. Which CA algorithms verify is whatever the
+host's crypto library allows in its current configuration, found out by
+asking it rather than by table:
+.IP \(bu 4
+RSA and ECDSA certificates go through the same OpenSSL calls with FIPS on
+or off. Where the FIPS module refuses one \(em an RSA CA below the approved
+key size, say \(em the check fails and the log line carries OpenSSL's own
+reason, not a claim that the certificate was malformed.
+.IP \(bu 4
+Ed25519 is the algorithm a FIPS configuration commonly lacks. On first use
+the module has the host's OpenSSL verify a known RFC 8032 vector; if that
+is refused, an
+.B ssh\-ed25519
+CA is skipped with a warning naming FIPS, every other CA type keeps
+working, and a certificate signed by such a CA is refused as unsupported
+rather than as a bad signature. RHEL 8's FIPS module has no EdDSA; RHEL 9's
+OpenSSL 3.5 does, and there Ed25519 works in FIPS mode.
+.IP \(bu 4
+TLS to the server is
+.BR libcurl (3)
+over the same OpenSSL, under the same policy.
+.PP
+FIPS mode is detected from the kernel's
+.I /proc/sys/crypto/fips_enabled
+where there is one, and from the library's own flag \(em the default
+property query on OpenSSL 3, the mode switch on 1.1.1 \(em so a host that
+forces it through OpenSSL configuration alone is also reported. The state
+appears in the version line of every authentication as
+.BR "fips: on" " or " "fips: off" .
+On macOS there is no such switch \(em Apple's corecrypto is validated as
+shipped \(em and the line carries no field.
+.SH PAM ITEMS
+The module reads
+.BR PAM_USER ,
+which names the account, and
+.BR PAM_SERVICE ", " PAM_TTY " and " PAM_RHOST ,
+which together with the hostname are sent to
+.B ssoosshd
+as the request's context, so the approver can tell a request they caused
+from one they did not: which machine, through which service, at which
+terminal, from where. Every one of them is self\-reported by an
+unauthenticated caller and the server shows them as claims, not facts.
+.BR PAM_TTY " and " PAM_RHOST
+also decide the flow, as described under
+.BR MODES .
+Everything written to the terminal goes through the PAM conversation
+function the application supplied; the module never opens the tty itself.
+.SH NETWORK
+Requests go over HTTPS with TLS 1.3 only, verified against the operating
+system's trust store; there is no option for a private CA bundle other than
+installing the CA into that store. Redirects are not followed. Connecting
+is bounded at ten seconds and the whole attempt by
+.BR timeout .
+While waiting, the module holds one streaming connection open for the
+approval and reconnects if it drops.
+.PP
+The HTTP client is
+.BR libcurl (3),
+which honours the
+.BR http_proxy ", " https_proxy " and " no_proxy
+environment variables. Inside
+.BR sudo (8)
+those are normally scrubbed from the environment, so a host that needs a
+proxy for the module has to arrange it in the calling process.
 .SH LOGGING
 Everything goes to
 .BR syslog (3)
@@ -265,24 +461,94 @@ crypto and HTTP libraries actually linked into the process:
 .PP
 .RS
 .nf
-pam_ssoossh: 1.0.0 | crypto: OpenSSL 1.1.1k | http: libcurl/7.61.1 OpenSSL/1.1.1k
+pam_ssoossh: 1.0.0 | crypto: OpenSSL 1.1.1k | fips: off | http: libcurl/7.61.1 OpenSSL/1.1.1k
 .fi
 .RE
 .PP
 The module links crypto rather than shipping it, so which OpenSSL is
 resident in
-.BR sudo (8)
-is a property of the host. That line is what makes the question answerable
-across a fleet by grepping syslog.
+.BR sudo (8),
+and whether it is in FIPS mode, is a property of the host. That line is
+what makes the question answerable across a fleet by grepping syslog.
+Failures log their reason at
+.BR LOG_ERR ,
+a successful authentication at
+.BR LOG_INFO ,
+and the per\-check reasoning at
+.B LOG_DEBUG
+when
+.B debug
+is set.
+.PP
+Text that reaches the terminal is filtered first: the approval URL is
+reduced to the RFC 3986 character set, the console code to its base32
+alphabet, and the QR code to the three block characters it is drawn from.
+A server response that lost characters to that filter is logged as a
+warning, because it is either an
+.B ssoosshd
+that changed shape or a hostile one.
+.SH COMPATIBILITY
+Differences from the Go module worth knowing when swapping one for the
+other:
+.IP \(bu 4
+The console flow and
+.B mode=
+exist only here.
+.IP \(bu 4
+.B PAM_IGNORE
+is returned on Ctrl\-C here; the Go module returns
+.B PAM_AUTH_ERR
+for that case.
+.IP \(bu 4
+.B ssh\-rsa
+(SHA\-1) CAs are refused here and accepted there.
+.IP \(bu 4
+Log lines are prefixed
+.B pam_ssoossh:
+here; the Go module logs under the syslog tag
+.BR ssoossh .
+.IP \(bu 4
+Text sent to the terminal is filtered here, as described under
+.BR LOGGING .
+.SH FILES
+.TP
+.I /etc/pam.d/*
+The service stanzas that load this module.
+.TP
+.I /lib/*/security/pam_ssoossh.so
+The module, wherever
+.BR libpam (8)
+looks on this platform:
+.I /usr/lib/<triplet>/security
+on Debian and Ubuntu,
+.I /usr/lib64/security
+on RHEL and its rebuilds,
+.I /lib/security
+on Alpine.
+.TP
+.I /usr/share/doc/pam\-ssoossh/examples/
+Shipped by the packages: a commented
+.BR pam.d (5)
+fragment for each service under
+.IR pam.d/ ,
+and a
+.I principals.yaml
+to start from.
+.TP
+.I /etc/ssoossh/ca.pub
+.TQ
+.I /etc/ssoossh/principals.yaml
+The paths the examples use. Nothing in the module fixes them.
 .SH EXAMPLES
-The documented stanza, and the only one:
+The documented stanza for
+.BR sudo :
 .PP
 .RS
 .nf
 auth    sufficient  pam_ssoossh.so server=https://ssoossh.example.com \\
-                    trusted-ca-file=/etc/ssoossh/ca.pub \\
-                    principals-map=/etc/ssoossh/principals.yaml \\
-                    skew-tolerance=2s timeout=60s
+                    trusted\-ca\-file=/etc/ssoossh/ca.pub \\
+                    principals\-map=/etc/ssoossh/principals.yaml \\
+                    skew\-tolerance=2s timeout=60s
 auth    required    pam_unix.so
 .fi
 .RE
@@ -295,12 +561,29 @@ A denied approval therefore reaches the password prompt. That is the
 intended posture rather than an oversight: ssoossh is an additional way to
 authenticate, not a gate that can lock an operator out of a host when the
 browser flow is unavailable.
+.PP
+The same line forcing the console flow on a
+.BR login (1)
+service, guarded so root never sees it:
+.PP
+.RS
+.nf
+auth    [success=ignore default=1]  pam_succeed_if.so user != root quiet
+auth    sufficient  pam_ssoossh.so server=https://ssoossh.example.com \\
+                    trusted\-ca\-file=/etc/ssoossh/ca.pub \\
+                    principals\-map=/etc/ssoossh/principals.yaml \\
+                    mode=console timeout=120s
+.fi
+.RE
 .SH SEE ALSO
+.BR pam_ssoossh\-ca (5),
+.BR pam_ssoossh\-principals (5),
 .BR pam.conf (5),
 .BR pam.d (5),
 .BR pam (8),
 .BR sudo (8),
+.BR sshd_config (5),
 .BR syslog (3),
-.BR ssh-keygen (1)
+.BR ssh\-keygen (1)
 .SH AUTHORS
 Mike Nestor. MIT licensed.

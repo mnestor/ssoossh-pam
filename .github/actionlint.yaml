@@ -1,0 +1,8 @@
+# Runner labels actionlint's built-in list does not know yet. GitHub's
+# macOS images move with each Xcode cycle and the installed actionlint
+# lags them; apple-beta is the self-hosted label apple-drift.yml expects.
+self-hosted-runner:
+  labels:
+    - macos-26
+    - xcode-27
+    - apple-beta

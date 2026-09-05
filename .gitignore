@@ -15,6 +15,9 @@
 /tests/loadtest
 /tests/unit_tests
 
+# Release artifacts from `make dist`.
+/dist/
+
 # Third-party skill checkouts, which carry their own .git.
 /.claude/skills
 

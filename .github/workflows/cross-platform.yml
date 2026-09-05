@@ -136,13 +136,13 @@ jobs:
           ls -l "$sdk/usr/include/security/openpam.h"
           find /usr/lib/pam -maxdepth 1 -name 'pam_*' | head
 
-          # Whether SecKey has gained Ed25519 since this was written. If it
-          # has, the capability gap can close without vendoring anything --
-          # see docs/porting.md.
-          echo "--- SecKey key types in this SDK ---"
-          grep -rho 'kSecAttrKeyType[A-Za-z0-9]*' \
-            "$sdk/System/Library/Frameworks/Security.framework/Headers/" \
-            | sort -u || true
+      # The Ed25519 SPI the Darwin backend resolves at runtime, checked in
+      # this SDK's export list before anything is built. A missing symbol
+      # here is the earliest possible warning that a macOS is about to
+      # lose ssh-ed25519 CAs -- see docs/porting.md, and apple-drift.yml
+      # for the same check across every SDK and beta on a schedule.
+      - name: Ed25519 SPI still exported by this SDK
+        run: tests/apple-spi-check.sh --sdk "$(xcrun --show-sdk-path)"
 
       - name: Build
         run: make
@@ -152,6 +152,12 @@ jobs:
 
       - name: Symbol, load and unit gates
         run: make test
+
+      # The other half of the SPI check: through the framework this macOS
+      # actually runs, via the backend's own self-test and the pinned
+      # acceptance profile in tests/unit/ed25519_test.c.
+      - name: Ed25519 SPI works on this macOS
+        run: make check-apple-spi
 
       - name: No stdio in the module
         run: make check-stdio

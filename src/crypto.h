@@ -43,9 +43,10 @@ typedef enum {
     SSOOSSH_VERIFY_OK,
     /* Cryptographically checked and wrong. */
     SSOOSSH_VERIFY_BAD,
-    /* This backend cannot verify this algorithm at all -- Ed25519 on
-     * macOS -- or will not, as with SHA-1 RSA. Distinct from BAD because
-     * the operator needs to be told the algorithm is the problem, not the
+    /* This backend cannot verify this algorithm at all -- Ed25519 on a
+     * macOS whose Security.framework no longer exports the SPI for it --
+     * or will not, as with SHA-1 RSA. Distinct from BAD because the
+     * operator needs to be told the algorithm is the problem, not the
      * key. */
     SSOOSSH_VERIFY_UNSUPPORTED,
     /* The key or signature blob is malformed. */
@@ -82,7 +83,17 @@ void ssoossh_crypto_wipe(void *p, size_t n);
 
 /* Names the crypto actually linked into this process, for the version line
  * every authentication logs. This is the fleet's only answer to "which
- * OpenSSL is really resident in sudo on that host". */
+ * OpenSSL is really resident in sudo on that host" -- and, on macOS, to
+ * "did this host's Security.framework still have Ed25519". */
 const char *ssoossh_crypto_version(void);
+
+/* Whether the host's crypto is running in FIPS mode: "on", "off", or NULL
+ * on a platform that has no such switch (macOS, whose corecrypto is
+ * validated as shipped). Logged beside the version. The module makes no
+ * algorithm decisions of its own from this -- the per-attempt key is
+ * always P-384, and which CA algorithms verify is whatever the host's
+ * crypto allows in its current configuration, found out by asking it
+ * rather than by table. */
+const char *ssoossh_crypto_fips_state(void);
 
 #endif /* PAM_SSOOSSH_CRYPTO_H */

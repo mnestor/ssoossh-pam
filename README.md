@@ -47,7 +47,16 @@ session, where a browser is a keystroke away, so it is not a console.
 
 ## Configuration
 
-The documented stanza, and the only one:
+Three manual pages cover it: [`pam_ssoossh(8)`](docs/pam_ssoossh.8) for the
+module and its arguments, [`pam_ssoossh-ca(5)`](docs/pam_ssoossh-ca.5) for
+the trusted CA file, and
+[`pam_ssoossh-principals(5)`](docs/pam_ssoossh-principals.5) for the
+principals map. [`docs/examples/`](docs/examples/) holds a commented `pam.d`
+fragment for `sudo`, `su`, `sshd` and a console `login`, and a
+`principals.yaml` to start from; the packages install them under
+`/usr/share/doc/pam-ssoossh/examples/`.
+
+The documented stanza for `sudo`:
 
 ```
 # /etc/pam.d/sudo
@@ -176,7 +185,7 @@ vague signature failure.
 | --- | --- | --- |
 | `ecdsa-sha2-nistp256` / `384` / `521` | supported | supported |
 | `rsa-sha2-256` / `rsa-sha2-512` | supported | supported |
-| `ssh-ed25519` | supported | **not supported** |
+| `ssh-ed25519` | supported | supported (macOS 14 and later, see below) |
 | `ssh-rsa` (SHA-1) | rejected by policy | rejected by policy |
 
 `ssh-rsa` names RSA with SHA-1, which OpenSSH has disabled by default since
@@ -184,9 +193,23 @@ vague signature failure.
 certificate today and this one refuses it by name — the one place the C
 module is deliberately stricter.
 
-macOS has no C-callable Ed25519: Apple's implementation is in CryptoKit,
-which is Swift-only. Since macOS ships no artifact, the gap is documented
-rather than worked around.
+On macOS, Ed25519 goes through a Security.framework SPI that Apple exports
+but does not declare in any public header — `kSecAttrKeyTypeEd25519` and
+the EdDSA `SecKeyAlgorithm`, present since macOS 14 and implemented over
+the same corecrypto call CryptoKit makes. The backend resolves both with
+`dlsym` rather than linking them, self-tests them against RFC 8032 before
+use, and reports the outcome in the version line every authentication logs:
+
+```
+pam_ssoossh: 1.0.0 | crypto: Security.framework (Ed25519 SPI ok) | http: ...
+```
+
+A macOS that stops exporting the SPI degrades to "ssh-ed25519 unsupported"
+— the CA is skipped with a warning naming its type, never a bare signature
+failure — and [`.github/workflows/apple-drift.yml`](.github/workflows/apple-drift.yml)
+checks every SDK and beta GitHub hosts weekly so that shows up before a
+host does. [`docs/porting.md`](docs/porting.md) has the evidence and the
+fallback plan.
 
 ## Crypto is linked, not shipped
 
@@ -196,8 +219,17 @@ module reports the versions it actually linked, at `LOG_INFO`, on every
 authentication:
 
 ```
-pam_ssoossh: 1.0.0 | crypto: OpenSSL 1.1.1k | http: libcurl/7.61.1 OpenSSL/1.1.1k
+pam_ssoossh: 1.0.0 | crypto: OpenSSL 1.1.1k | fips: off | http: libcurl/7.61.1 OpenSSL/1.1.1k
 ```
+
+The `fips` field is the host's FIPS mode, read from the kernel flag and from
+OpenSSL's own switch. The module defers to it rather than reasoning about
+it: the per-attempt key is P-384 everywhere, RSA and ECDSA CAs go through
+the same calls with FIPS on or off and a refusal is logged in OpenSSL's
+words, and Ed25519 is probed with an RFC 8032 vector on first use, so a
+FIPS module without EdDSA (RHEL 8) skips `ssh-ed25519` CAs with a warning
+naming FIPS while one with it (RHEL 9, OpenSSL 3.5) verifies them. CI runs
+the el8 and el9 rows a second time with OpenSSL forced into FIPS mode.
 
 That line is what makes "which crypto is running in sudo across the fleet" a
 syslog grep rather than guesswork, including for a host whose distribution
@@ -275,8 +307,54 @@ stub written against them.
 
 [`docs/porting.md`](docs/porting.md) is the sequence for building and
 testing on those two by hand — what to install, what to run, what is most
-likely to break first, and why an Objective-C backend would not close the
-Ed25519 gap on macOS.
+likely to break first, and how Ed25519 on macOS is kept honest.
+
+## Releases
+
+Pushing a `v*` tag runs
+[`.github/workflows/release.yml`](.github/workflows/release.yml): every
+platform in the table above that ships an artifact is built in its own
+container or VM, put through the same gates as CI, packaged with
+`make dist`, and published as one GitHub release with a `SHA256SUMS` and
+build provenance. A tag with a hyphen (`v1.2.0-rc1`) is a pre-release;
+`gh workflow run release.yml` builds everything and publishes nothing.
+
+Each tarball holds the stripped module, the man page, the licence, and a
+`BUILDINFO` naming the compiler, the library versions it was built against,
+and the sonames it needs. The name says where it loads, because the module
+links the host's libraries rather than shipping them. The Linux tarballs are
+also wrapped as distribution packages by [nfpm](https://nfpm.goreleaser.com)
+(`packaging/`), which install the module where that distribution's libpam
+looks and declare the sonames it needs:
+
+| artifact | for | package |
+| --- | --- | --- |
+| `linux-{x86_64,aarch64}-glibc-openssl3` | RHEL 9 and rebuilds, Debian 12+, Ubuntu 22.04+, anything with `libcrypto.so.3` | `.deb`, `.rpm` |
+| `linux-{x86_64,aarch64}-glibc-openssl1.1` | RHEL 8 and rebuilds, anything with `libcrypto.so.1.1` | `.rpm` |
+| `linux-{x86_64,aarch64}-musl` | Alpine | `.apk` |
+| `freebsd14-x86_64` | FreeBSD 14 | tarball only |
+
+The packages install nothing into `/etc/pam.d`; wiring the module into a
+service stanza stays an operator's decision, as
+[`pam_ssoossh(8)`](docs/pam_ssoossh.8) describes. `make packages` builds
+them locally from `make dist` if nfpm is installed.
+
+`tests/dist-target.sh` prints which of those the machine you are on wants.
+
+Releases are signed when the repository holds the keys: the deb and rpm
+packages and `SHA256SUMS` with an OpenPGP key, the apk with the RSA key
+Alpine expects, both public halves attached to the release. To verify a
+download:
+
+```console
+$ gpg --import pam-ssoossh-release-key.asc
+$ gpg --verify SHA256SUMS.asc SHA256SUMS
+$ sha256sum -c SHA256SUMS --ignore-missing
+$ gh attestation verify pam_ssoossh-v1.2.0-linux-x86_64-glibc-openssl3.tar.gz -R <owner>/<repo>
+```
+
+[`packaging/README.md`](packaging/README.md) has the key setup, the secret
+names, and the per-format details.
 
 ## Testing
 
