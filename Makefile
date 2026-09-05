@@ -400,7 +400,7 @@ lint:
 	  case $$t in \
 	    actionlint)    actionlint || rc=1 ;; \
 	    groff)         groff -man -Tutf8 -z -ww docs/*.[58] || rc=1 ;; \
-	    shellcheck)    shellcheck tests/*.sh packaging/*.sh || rc=1 ;; \
+	    shellcheck)    shellcheck -x tests/*.sh packaging/*.sh || rc=1 ;; \
 	    clang-format)  clang-format --dry-run --Werror src/*.c src/*.h tests/*.c || rc=1 ;; \
 	    cppcheck)      cppcheck --quiet --error-exitcode=1 \
 	                     --enable=warning,portability \

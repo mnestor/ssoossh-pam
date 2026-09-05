@@ -39,6 +39,7 @@ PKG_HOMEPAGE=${PKG_HOMEPAGE:-https://github.com/mnestor/ssoossh}
 PKG_GPG_KEY_FILE=${PKG_GPG_KEY_FILE:-}
 PKG_APK_KEY_FILE=${PKG_APK_KEY_FILE:-}
 here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source-path=SCRIPTDIR
 . "$here/version.sh"
 
 stage=$(mktemp -d "${TMPDIR:-/tmp}/pam_ssoossh-pkg.XXXXXX")

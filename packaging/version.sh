@@ -1,4 +1,8 @@
 # shellcheck shell=sh
+# PKG_VERSION and PKG_PRERELEASE are what this file is for: the caller
+# that sources it reads them, so from inside they look written and never
+# read.
+# shellcheck disable=SC2034
 # Sourced by package.sh and macos.sh: `git describe` into what package
 # formats accept. A tag is the version; what follows it becomes the
 # pre-release, which each packager spells its own way (1.2.0~rc1 for deb

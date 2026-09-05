@@ -44,6 +44,7 @@ tarball=${1:?usage: $0 <dist tarball> [outdir]}
 outdir=${2:-$(dirname "$tarball")}
 PKG_IDENTIFIER=${PKG_IDENTIFIER:-org.mikenestor.pam_ssoossh}
 here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source-path=SCRIPTDIR
 . "$here/version.sh"
 
 [ "$(uname -s)" = Darwin ] || {
