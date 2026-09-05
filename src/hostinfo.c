@@ -18,8 +18,8 @@ static void trim_end(char *s)
 {
     size_t n = strlen(s);
 
-    while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r' ||
-                     s[n - 1] == ' ' || s[n - 1] == '\t')) {
+    while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r' || s[n - 1] == ' ' ||
+                     s[n - 1] == '\t')) {
         s[--n] = '\0';
     }
 }

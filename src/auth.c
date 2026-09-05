@@ -192,7 +192,8 @@ static bool build_body(attempt *a, const char *user, const char *public_key,
     ok = ok && append_int(a, &len, "caller_ppid", (long long)getppid());
     ok = ok && append_opt(a, &len, "machine_id", host.machine_id);
     ok = ok && append_opt(a, &len, "os", host.os);
-    ok = ok && append_opt(a, &len, "client", "pam_ssoossh-c/" PAM_SSOOSSH_VERSION);
+    ok = ok &&
+         append_opt(a, &len, "client", "pam_ssoossh-c/" PAM_SSOOSSH_VERSION);
     ok = ok && append_opt(a, &len, "mode", mode_name(cfg->mode));
     ok = ok && append_opt(a, &len, "client_time", host.client_time);
 
@@ -205,8 +206,7 @@ static bool build_body(attempt *a, const char *user, const char *public_key,
     for (size_t i = 0; i < a->cas.count && i < 8; i++) {
         char fp[SSOOSSH_FINGERPRINT_LEN];
 
-        ssoossh_sshkey_fingerprint(a->cas.keys[i].blob, a->cas.keys[i].len,
-                                   fp);
+        ssoossh_sshkey_fingerprint(a->cas.keys[i].blob, a->cas.keys[i].len, fp);
         if (i > 0) {
             ok = ok && ssoossh_json_append(a->body, sizeof(a->body), &len, ",");
         }

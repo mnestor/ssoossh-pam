@@ -95,8 +95,8 @@ typedef struct {
     char version[16];
 } tls_probe;
 
-static int on_debug_text(CURL *h, curl_infotype type, char *data,
-                         size_t size, void *userptr)
+static int on_debug_text(CURL *h, curl_infotype type, char *data, size_t size,
+                         void *userptr)
 {
     static const char needle[] = "SSL connection using ";
     tls_probe *probe = userptr;
@@ -301,8 +301,8 @@ ssoossh_http_result ssoossh_httpc_post_json(const char *url, const char *body,
             result = SSOOSSH_HTTP_TRANSPORT;
         } else
 #endif
-        result = (*status >= 200 && *status < 300) ? SSOOSSH_HTTP_OK
-                                                   : SSOOSSH_HTTP_STATUS;
+            result = (*status >= 200 && *status < 300) ? SSOOSSH_HTTP_OK
+                                                       : SSOOSSH_HTTP_STATUS;
     } else if (prog.cancelled) {
         result = SSOOSSH_HTTP_CANCELLED;
     } else if (prog.timed_out) {
@@ -502,6 +502,11 @@ static ssoossh_http_result run_stream(const char *url, bool insecure,
         }
         curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, status);
 
+        /* Hand-formatted: with the #endif between them, the formatter
+         * reads this `if` as the else's substatement and indents it a
+         * level deeper than its own body, which hides the shape of the
+         * chain. On a build that is not Apple's it is the chain head. */
+        /* clang-format off */
 #ifdef __APPLE__
         if (!tls_floor_met(&probe, url)) {
             ssoossh_errf("negotiated %s, refusing (floor is TLS 1.3)",
@@ -510,6 +515,7 @@ static ssoossh_http_result run_stream(const char *url, bool insecure,
         } else
 #endif
         if (sc.sse_stopped) {
+            /* clang-format on */
             /* A callback said it had what it needed. The write callback
              * returned short to stop the transfer, which libcurl reports as
              * a write error -- expected, not a failure. */

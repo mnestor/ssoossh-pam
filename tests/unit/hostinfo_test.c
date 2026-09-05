@@ -29,7 +29,8 @@ int suite_hostinfo(void)
     T_CHECK(strlen(info.os) <= SSOOSSH_HOSTINFO_CAP);
 
     /* The clock: well-formed, parses, and is this machine's now. */
-    T_CHECKF(strlen(info.client_time) == 20, "client_time %s", info.client_time);
+    T_CHECKF(strlen(info.client_time) == 20, "client_time %s",
+             info.client_time);
     T_CHECKF(ssoossh_parse_rfc3339(info.client_time, &parsed),
              "client_time %s does not parse", info.client_time);
     T_CHECKF(parsed >= now - 5 && parsed <= now + 5,
