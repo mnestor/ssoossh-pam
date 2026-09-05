@@ -233,6 +233,15 @@ jobs:
   # target name carries the deployment floor rather than the runner's
   # release, so this stays macos15-aarch64 when the runner label moves.
   #
+  # It moved: macOS 26, building for a floor of 15 with
+  # -mmacosx-version-min. The signing identities are exported from Keychain
+  # Access on a macOS 26 Mac, and macOS 15 cannot read the PKCS#12 that
+  # writes -- PBES2, AES-256-CBC, SHA-256 MAC -- so every rotation of those
+  # certificates otherwise needs converting by hand on the way into the
+  # secret store. What that costs is the module no longer being loaded on
+  # the oldest release it claims: cross-platform.yml still builds and runs
+  # the gates on macos-15, which is where that is checked now.
+  #
   # The installer package is built here rather than in the release job,
   # because pkgbuild, productbuild, codesign and notarytool exist only on
   # macOS. The signing identities and the notary key come from 1Password
@@ -242,7 +251,7 @@ jobs:
   # apk keys in the release job.
   macos:
     name: macos15-aarch64
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 45
     env:
       HAVE_OP: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
