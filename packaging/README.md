@@ -84,7 +84,7 @@ Linux packages:
 
   ```console
   $ gpg --quick-generate-key 'pam_ssoossh release <release@example.org>' rsa4096 sign never
-  $ gpg --armor --export-secret-keys release@example.org   # -> RELEASE_GPG_PRIVATE_KEY
+  $ gpg --armor --export-secret-keys release@example.org   # -> private.pgp
   $ gpg --fingerprint release@example.org                  # -> README
   ```
 
@@ -96,7 +96,7 @@ Linux packages:
   found". Generate an unencrypted RSA key for it:
 
   ```console
-  $ openssl genrsa -out apk.pem 4096                       # -> RELEASE_APK_PRIVATE_KEY
+  $ openssl genrsa -out apk.pem 4096                       # -> apk.pem
   $ openssl rsa -in apk.pem -pubout -out pam-ssoossh.rsa.pub
   ```
 
@@ -111,12 +111,24 @@ Repository secrets the release workflow reads:
 
 | secret | holds |
 | --- | --- |
-| `RELEASE_GPG_PRIVATE_KEY` | the armored OpenPGP private key; deb, rpm, SHA256SUMS |
-| `RELEASE_GPG_PASSPHRASE` | its passphrase, if it has one |
-| `RELEASE_APK_PRIVATE_KEY` | an unencrypted RSA private key in PEM; the apk |
+| `OP_SERVICE_ACCOUNT_TOKEN` | a 1Password service account token |
 
-All optional, and each is checked before it is used: a key of the wrong
-kind leaves that one format unsigned rather than failing the release.
+That is the only repository secret. The keys themselves live in 1Password,
+in the item the release job names, and the service account must be able to
+read the vault holding it:
+
+| field | holds |
+| --- | --- |
+| `private.pgp` | the **armored** OpenPGP private key; deb, rpm, SHA256SUMS |
+| `password` | its passphrase |
+| `apk.pem` | an unencrypted RSA private key in PEM; the apk |
+
+`private.pgp` has to be armored: a binary `gpg --export-secret-keys` does
+not survive the trip through a step output.
+
+All optional, and each is checked before it is used: a missing token, or a
+key of the wrong kind, leaves that one format unsigned rather than failing
+a release that has everything else built.
 Both public keys are attached to every release, as
 `pam-ssoossh-release-key.asc` and `pam-ssoossh.rsa.pub`; publish the
 OpenPGP fingerprint somewhere that is not the release page as well.

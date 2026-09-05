@@ -348,6 +348,8 @@ jobs:
     name: release
     needs: [linux, musl, freebsd, macos]
     runs-on: ubuntu-latest
+    env:
+      HAVE_OP: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
     permissions:
       contents: write # gh release create
       id-token: write # provenance attestation
@@ -386,36 +388,56 @@ jobs:
       # read. All optional: a repository without them still gets its
       # release, unsigned, and the log says so.
       #
-      #   RELEASE_GPG_PRIVATE_KEY   armored OpenPGP private key; signs the
-      #                             deb and rpm packages and SHA256SUMS.
-      #                             See packaging/README.md
-      #   RELEASE_GPG_PASSPHRASE    its passphrase, if any
-      #   RELEASE_APK_PRIVATE_KEY   RSA private key in PEM, unencrypted;
-      #                             signs the apk. A second key, because it
-      #                             has to be: nfpm signs an apk with RSA
-      #                             and apk(8) verifies it against an RSA
-      #                             public key under /etc/apk/keys, so an
-      #                             OpenPGP key cannot serve here however
-      #                             convenient one release key would be.
+      #   private.pgp   armored OpenPGP private key; signs the deb and rpm
+      #                 packages and SHA256SUMS
+      #   password      its passphrase
+      #   apk.pem       RSA private key in PEM, unencrypted; signs the apk.
+      #                 A second key, because it has to be: nfpm signs an
+      #                 apk with RSA and apk(8) verifies it against an RSA
+      #                 public key under /etc/apk/keys, so an OpenPGP key
+      #                 cannot serve here however convenient one release
+      #                 key would be.
+      #
+      # As with the macOS job, only when the token is set: a fork without it
+      # still gets its release, unsigned, and the log says which key was
+      # missing. See packaging/README.md.
+      - name: Signing material
+        id: secrets
+        if: ${{ env.HAVE_OP == 'true' }}
+        uses: 1password/load-secrets-action@e544b780808654ba8ceba5fb2fe2897103d92ff4 # v5.0.0
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          GPG_PRIVATE_KEY: op://Github Actions/ifx7xxoazokhouv2z2cstg7f7a/private.pgp
+          GPG_PASSPHRASE: op://Github Actions/ifx7xxoazokhouv2z2cstg7f7a/password
+          APK_PRIVATE_KEY: op://Github Actions/ifx7xxoazokhouv2z2cstg7f7a/apk.pem
+
       - name: Signing keys
         env:
-          GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
-          APK_PRIVATE_KEY: ${{ secrets.RELEASE_APK_PRIVATE_KEY }}
+          GPG_PRIVATE_KEY: ${{ steps.secrets.outputs.GPG_PRIVATE_KEY }}
+          APK_PRIVATE_KEY: ${{ steps.secrets.outputs.APK_PRIVATE_KEY }}
         run: |
           keys=$(mktemp -d)
           chmod 700 "$keys"
-          if [ -n "$GPG_PRIVATE_KEY" ]; then
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "gpg: no private.pgp in the 1Password item; deb, rpm and SHA256SUMS will be unsigned"
+          elif ! printf '%s\n' "$GPG_PRIVATE_KEY" | grep -q "BEGIN PGP PRIVATE KEY BLOCK"; then
+            # A binary `gpg --export-secret-keys` cannot ride through a step
+            # output and arrives mangled rather than missing, so it is
+            # caught by shape here instead of by gpg later.
+            echo "gpg: private.pgp is not an *armored* OpenPGP private key; re-attach it as" \
+              "\`gpg --armor --export-secret-keys\`. deb, rpm and SHA256SUMS will be unsigned"
+          else
             printf '%s\n' "$GPG_PRIVATE_KEY" > "$keys/gpg.asc"
             echo "PKG_GPG_KEY_FILE=$keys/gpg.asc" >> "$GITHUB_ENV"
             echo "gpg: signing with the release key"
-          else
-            echo "gpg: RELEASE_GPG_PRIVATE_KEY is not set; deb, rpm and SHA256SUMS will be unsigned"
           fi
           # Checked before it is used, not after: nfpm fails the whole
           # release on a key it cannot parse ("Signing error: no PEM block
           # found"), which is a poor trade for one unsigned apk.
           if [ -z "$APK_PRIVATE_KEY" ]; then
-            echo "apk: RELEASE_APK_PRIVATE_KEY is not set; the apk will be unsigned"
+            echo "apk: no apk.pem in the 1Password item; the apk will be unsigned"
           else
             printf '%s\n' "$APK_PRIVATE_KEY" > "$keys/apk.pem"
             if openssl rsa -in "$keys/apk.pem" -noout -passin pass: 2>/dev/null; then
@@ -423,7 +445,7 @@ jobs:
               echo "apk: signing with the apk release key"
             else
               rm -f "$keys/apk.pem"
-              echo "apk: RELEASE_APK_PRIVATE_KEY is not an unencrypted RSA private key" \
+              echo "apk: apk.pem is not an unencrypted RSA private key" \
                 "in PEM; the apk will be unsigned. An OpenPGP key will not do here" \
                 "-- see packaging/README.md"
             fi
@@ -433,7 +455,7 @@ jobs:
       - name: Packages
         env:
           PKG_HOMEPAGE: ${{ github.server_url }}/${{ github.repository }}
-          NFPM_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
+          NFPM_PASSPHRASE: ${{ steps.secrets.outputs.GPG_PASSPHRASE }}
         run: |
           for t in dist/*.tar.gz; do
             packaging/package.sh "$t" dist
@@ -448,7 +470,7 @@ jobs:
       # is not the only place the key is vouched for.
       - name: Checksums and signature
         env:
-          NFPM_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
+          NFPM_PASSPHRASE: ${{ steps.secrets.outputs.GPG_PASSPHRASE }}
         run: |
           cd dist
           sha256sum -- *.tar.gz *.deb *.rpm *.apk *.pkg | tee SHA256SUMS
@@ -489,12 +511,18 @@ jobs:
             *-*) pre=--prerelease ;;
             *)   pre= ;;
           esac
+          # nullglob because the signatures are optional: without them
+          # dist/*.asc stays literal, and `gh` fails a release that is
+          # otherwise complete over a file that was never meant to exist.
+          shopt -s nullglob
+          assets=(dist/*.tar.gz dist/*.deb dist/*.rpm dist/*.apk dist/*.pkg
+                  dist/SHA256SUMS* dist/*.asc dist/*.pub)
+          printf 'publishing %s\n' "${assets[@]}"
           # shellcheck disable=SC2086  # $pre is deliberately empty or one flag
           gh release create "$GITHUB_REF_NAME" $pre \
             --verify-tag --generate-notes \
             --title "$GITHUB_REF_NAME" \
-            dist/*.tar.gz dist/*.deb dist/*.rpm dist/*.apk dist/*.pkg \
-            dist/SHA256SUMS* dist/*.asc dist/*.pub
+            "${assets[@]}"
 
       # On a manual run there is no tag and no release: the merged set is
       # kept as a workflow artifact for inspection instead.
