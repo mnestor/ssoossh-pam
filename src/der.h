@@ -46,6 +46,16 @@ bool ssoossh_der_spki_ec(ssoossh_curve curve, const uint8_t *point,
                          size_t point_len, uint8_t *out, size_t out_cap,
                          size_t *out_len);
 
+/* PKCS#1 RSAPublicKey ::= SEQUENCE { modulus INTEGER, publicExponent
+ * INTEGER } -- note the order is n then e, the reverse of the SSH blob's.
+ *
+ * Exposed on its own because the Darwin backend's SecKeyCreateWithData
+ * takes this bare, where OpenSSL's d2i_PUBKEY takes the SPKI wrapper
+ * around it. */
+bool ssoossh_der_rsa_pkcs1(const uint8_t *e, size_t e_len, const uint8_t *n,
+                           size_t n_len, uint8_t *out, size_t out_cap,
+                           size_t *out_len);
+
 /* SPKI for an RSA public key, from the SSH blob's e and n. */
 bool ssoossh_der_spki_rsa(const uint8_t *e, size_t e_len, const uint8_t *n,
                           size_t n_len, uint8_t *out, size_t out_cap,

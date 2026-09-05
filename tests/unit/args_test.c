@@ -132,7 +132,7 @@ int suite_args(void)
     T_EQ_INT(cfg.timeout, SSOOSSH_DEFAULT_TIMEOUT);
     T_CHECK(!cfg.insecure_skip_verify);
     T_CHECK(!cfg.debug);
-    T_EQ_INT(cfg.mode, SSOOSSH_MODE_SUDO);
+    T_EQ_INT(cfg.mode, SSOOSSH_MODE_AUTO);
 
     /* key=value pairs. */
     T_EQ_INT(parse(&cfg, ARGS("server=https://example.com",
@@ -231,12 +231,23 @@ int suite_args(void)
              SSOOSSH_ARGS_OK);
     T_EQ_STR(cfg.server, "https://example.com");
 
-    /* mode is fail-closed, which is the whole point of it existing now. */
+    /* mode. auto is the default and decides per login; sudo and console
+     * force one flow; anything else is fail-closed rather than a silent
+     * fall back to the flow the line did not ask for. */
+    T_EQ_INT(parse(&cfg, ARGS("mode=auto")), SSOOSSH_ARGS_OK);
+    T_EQ_INT(cfg.mode, SSOOSSH_MODE_AUTO);
     T_EQ_INT(parse(&cfg, ARGS("mode=sudo")), SSOOSSH_ARGS_OK);
     T_EQ_INT(cfg.mode, SSOOSSH_MODE_SUDO);
+#ifdef __APPLE__
+    /* Console mode is not compiled into the macOS build. */
     T_EQ_INT(parse(&cfg, ARGS("mode=console")),
              SSOOSSH_ARGS_CONSOLE_UNSUPPORTED);
+#else
+    T_EQ_INT(parse(&cfg, ARGS("mode=console")), SSOOSSH_ARGS_OK);
+    T_EQ_INT(cfg.mode, SSOOSSH_MODE_CONSOLE);
+#endif
     T_EQ_INT(parse(&cfg, ARGS("mode=whatever")), SSOOSSH_ARGS_BAD_MODE);
+    T_EQ_INT(parse(&cfg, ARGS("mode=Console")), SSOOSSH_ARGS_BAD_MODE);
     T_EQ_INT(parse(&cfg, ARGS("mode")), SSOOSSH_ARGS_BAD_MODE);
 
     /* A value that does not fit is reported rather than truncated: a

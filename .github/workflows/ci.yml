@@ -37,15 +37,19 @@ jobs:
           - name: debian12          # OpenSSL 3.0, curl 7.88, gcc 14
             container: debian:12
             install: apt-get update && apt-get install -y --no-install-recommends
-              build-essential pkg-config libssl-dev libpam0g-dev libpam-runtime git
+              build-essential pkg-config libssl-dev libcurl4-openssl-dev
+              libpam0g-dev libpam-runtime libpam-modules git openssh-client
+              python3
           - name: alpine            # musl, OpenSSL 3.5, gcc 15
             container: alpine:3
-            install: apk add --no-cache build-base pkgconf openssl-dev linux-pam-dev git
-              compiler-rt
+            install: apk add --no-cache build-base pkgconf openssl-dev curl-dev
+              linux-pam-dev linux-pam git compiler-rt openssh-keygen python3
+              bash
           - name: el8               # OpenSSL 1.1.1k, curl 7.61.1, gcc 8.5 -- the floor
             container: almalinux:8
-            install: dnf install -y gcc make pkgconf-pkg-config openssl-devel pam-devel git
-              libasan libubsan
+            install: dnf install -y gcc make pkgconf-pkg-config openssl-devel
+              libcurl-devel pam pam-devel git libasan libubsan openssh-clients
+              python3
     steps:
       - name: Install build dependencies
         run: ${{ matrix.install }}
@@ -61,12 +65,60 @@ jobs:
         run: |
           cc --version | head -1
           pkg-config --modversion libcrypto || true
+          pkg-config --modversion libcurl || true
 
       - name: Build
         run: make
 
-      - name: Symbol and load gates
+      - name: Symbol, load and unit gates
         run: make test
 
-      - name: Sanitiser build
+      # Nothing in the module may write to stdout or stderr: it lives inside
+      # sudo and sshd, where both streams belong to the host process.
+      # Dropping debug=stdout removed the only path that ever deliberately
+      # broke that rule, so this can be an unconditional failure rather than
+      # one with an exemption in it.
+      - name: No stdio in the module
+        run: make check-stdio
+
+      # A regression here usually means something got statically linked that
+      # should not have been.
+      - name: Size gate
+        run: make check-size
+
+      # The whole flow against a stub ssoosshd: create, the events stream,
+      # the reconnect, the deadline, and the four checks against a
+      # certificate ssh-keygen minted a moment earlier. Runs as root, which
+      # inside a job container it already is.
+      #
+      # Before the sanitiser build rather than after: `make san` leaves an
+      # instrumented module behind, and an instrumented module dlopened by
+      # an uninstrumented harness aborts on load. `make e2e` detects that
+      # and rebuilds, but not paying for the rebuild is better.
+      - name: End to end against a stub server
+        run: make e2e
+
+      - name: Sanitiser build and unit suite
         run: make san
+
+  # The parsers that touch bytes a network peer chose. A short run per
+  # target on every commit; a long one is a nightly's job, not a push's.
+  fuzz:
+    name: fuzz
+    runs-on: ubuntu-latest
+    container: debian:12
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential clang libclang-rt-dev pkg-config libssl-dev \
+            libcurl4-openssl-dev libpam0g-dev git openssh-client
+
+      - uses: actions/checkout@v4
+
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Fuzz every parser
+        run: make fuzz-run FUZZ_RUNS=200000

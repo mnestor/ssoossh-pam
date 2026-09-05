@@ -70,14 +70,21 @@ endif
 # tree so a change to the seam breaks the build of the platform it was not
 # written on -- but only the one this platform can link is fed to the
 # compiler.
-SRC     := $(filter-out src/crypto_openssl.c src/crypto_darwin.c, \
+SRC     := $(filter-out src/crypto_openssl.c src/crypto_darwin.c src/qr.c, \
                         $(wildcard src/*.c))
+VENDOR  :=
 ifeq ($(UNAME),Darwin)
-  SRC   += src/crypto_darwin.c
+  SRC    += src/crypto_darwin.c
 else
-  SRC   += src/crypto_openssl.c
+  # Console mode, and so the QR encoder, are Linux and FreeBSD only: macOS
+  # ships no artifact, so a console login there is scope with no user.
+  SRC    += src/crypto_openssl.c src/qr.c
+  VENDOR += third_party/qrcodegen/qrcodegen.c
 endif
 OBJ     := $(patsubst src/%.c,$(BUILD)/%.o,$(SRC))
+ifneq ($(VENDOR),)
+  OBJ   += $(BUILD)/qrcodegen.o
+endif
 
 CFLAGS  += -std=c11 -O2 -fPIC \
            -fvisibility=hidden \
@@ -122,13 +129,21 @@ ifneq ($(strip $(PKGS)),)
   endif
 endif
 LDLIBS += -lpam
+ifneq ($(UNAME),Darwin)
+  # pthread_once, which guards curl_global_init. On glibc 2.34 and later this
+  # is a stub -- libpthread was merged into libc -- but on the RHEL 8 floor's
+  # 2.28 it is a real library, and leaving it out is a link error that no
+  # modern distribution reproduces. macOS has it in libSystem.
+  LDLIBS += -lpthread
+endif
 
 ifneq ($(OPENSSL_PREFIX),)
   LDFLAGS += -Wl,-rpath,$(OPENSSL_PREFIX)/lib
 endif
 
-.PHONY: all clean check-symbols test san install help cross lint plan-serve \
-        ci-local ci-list
+.PHONY: all clean check-symbols check-stdio check-size test san install \
+        help cross lint plan-serve ci-local ci-list fuzz fuzz-run e2e \
+        differential
 
 all: $(MODULE)
 
@@ -137,6 +152,16 @@ $(BUILD):
 
 $(BUILD)/%.o: src/%.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+# Vendored code gets the same standard, the same hardening and the same
+# optimisation, but not -Wconversion. jsmn and qrcodegen are pinned by hash
+# and unmodified (see third_party/*/README.md); patching a dependency to
+# satisfy our warning flags would mean carrying a fork and re-applying it at
+# every update. Everything they touch has already been bounded by the caller.
+VENDOR_CFLAGS := $(filter-out -Wconversion,$(CFLAGS))
+
+$(BUILD)/qrcodegen.o: third_party/qrcodegen/qrcodegen.c | $(BUILD)
+	$(CC) $(CPPFLAGS) $(VENDOR_CFLAGS) -c $< -o $@
 
 $(MODULE): $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
@@ -199,6 +224,58 @@ test: check-symbols tests/loadtest tests/unit_tests
 	@./tests/loadtest ./$(MODULE)
 	@./tests/unit_tests
 
+# Nothing in the module may write to stdout or stderr. It lives inside sudo
+# and sshd, where both streams belong to the host process, and the only path
+# that ever deliberately broke that rule -- debug=stdout -- is gone, so this
+# is an unconditional failure rather than one with an exemption in it.
+#
+# tests/ is exempt because a test binary printing its results is the point.
+check-stdio:
+	@if grep -nE '\b(printf|fprintf|puts|putchar|perror|vprintf|vfprintf)\s*\(|\bwrite\s*\(\s*[12]\s*,' \
+	     src/*.c src/*.h; then \
+	  echo "check-stdio: the module must not write to stdout or stderr"; \
+	  exit 1; \
+	fi; \
+	echo "check-stdio: ok"
+
+# A stripped module over this usually means something got statically linked
+# that should not have been. The bundled-crypto variant has its own, much
+# larger target and is checked separately, so it cannot mask a regression
+# here.
+SIZE_LIMIT ?= 524288
+
+check-size: $(MODULE)
+	@cp $(MODULE) $(BUILD)/stripped.so && strip $(BUILD)/stripped.so; \
+	size=$$(wc -c < $(BUILD)/stripped.so); \
+	echo "check-size: $$size bytes stripped (limit $(SIZE_LIMIT))"; \
+	if [ "$$size" -gt "$(SIZE_LIMIT)" ]; then \
+	  echo "check-size: over the limit"; \
+	  exit 1; \
+	fi
+
+# The whole flow against tests/stubd.py, through a real PAM stack. Needs
+# root to install the module and write /etc/pam.d -- see tests/README.md.
+#
+# The sanitiser check is not paranoia. `make san` leaves an instrumented
+# module behind and removes the test binaries; the next `make e2e` then
+# builds an uninstrumented pamtest, dlopens an instrumented module into it,
+# and every scenario fails with "ASan runtime does not come first" -- which
+# looks like a module bug and is not one.
+e2e:
+	@if nm -D $(MODULE) 2>/dev/null | grep -q __asan; then \
+	  echo "e2e: the built module is sanitised; rebuilding it plain"; \
+	  $(MAKE) --no-print-directory clean; \
+	fi
+	@$(MAKE) --no-print-directory $(MODULE) tests/pamtest
+	@tests/e2e.sh $(SCENARIOS)
+
+# The same flow, run against the Go module as well, comparing the PAM
+# return code scenario by scenario. Needs SSOOSSH_GO_MODULE pointing at a
+# built one -- see tests/differential.sh.
+differential:
+	@$(MAKE) --no-print-directory $(MODULE) tests/pamtest
+	@tests/differential.sh
+
 # make SAN=1 turns the sanitisers on for everything built in that
 # invocation, the unit suite included -- which is the point of it being a
 # switch rather than a target: the parsers are where ASan and UBSan earn
@@ -208,6 +285,55 @@ test: check-symbols tests/loadtest tests/unit_tests
 san:
 	@$(MAKE) --no-print-directory clean
 	@$(MAKE) --no-print-directory SAN=1 all test
+
+# libFuzzer targets over every parser that touches bytes the module did not
+# write. Built with clang -- gcc has no libFuzzer -- and always with the
+# sanitisers, because a fuzzer that finds an overread and does not stop is a
+# fuzzer that finds nothing.
+#
+#   make fuzz                 build them all
+#   make fuzz-run             a short run of each, which is what CI does
+#   make fuzz-run FUZZ_RUNS=1000000 RUNS=... for a long one
+#
+# The corpus is tests/fixtures: real certificates and real CA files, so a
+# run starts from something structurally valid and mutates outward.
+FUZZ_SRC  := $(wildcard tests/fuzz/*.c)
+FUZZ_BINS := $(patsubst tests/fuzz/%.c,$(BUILD)/fuzz/%,$(FUZZ_SRC))
+FUZZ_CC   ?= clang
+FUZZ_RUNS ?= 20000
+
+$(BUILD)/fuzz:
+	@mkdir -p $(BUILD)/fuzz
+
+# The module's own sources are recompiled here rather than reused: the
+# fuzzer needs clang's instrumentation, and $(OBJ) was built by $(CC) with
+# neither. Everything else about the flags matches.
+$(BUILD)/fuzz/%: tests/fuzz/%.c $(SRC) | $(BUILD)/fuzz
+	$(FUZZ_CC) $(CPPFLAGS) -std=c11 -g -O1 \
+	    -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer \
+	    -D_GNU_SOURCE -DPAM_SSOOSSH_VERSION='"$(VERSION)"' \
+	    -o $@ $< $(SRC) $(if $(VENDOR),$(VENDOR),) $(LDLIBS)
+
+fuzz: $(FUZZ_BINS)
+	@echo "fuzz: built $(words $(FUZZ_BINS)) target(s) in $(BUILD)/fuzz"
+
+# The corpus directory order matters: libFuzzer *writes* new
+# coverage-increasing inputs into the first one it is given and only reads
+# the rest. So the writable corpus is under build/ and tests/fixtures is a
+# read-only seed -- otherwise a run leaves several thousand hash-named files
+# in the fixtures directory, which is how that was learned.
+FUZZ_CORPUS := $(BUILD)/fuzz/corpus
+
+fuzz-run: $(FUZZ_BINS)
+	@set -e; \
+	mkdir -p $(FUZZ_CORPUS); \
+	for f in $(FUZZ_BINS); do \
+	  echo "=== $$(basename $$f) ==="; \
+	  mkdir -p $(FUZZ_CORPUS)/$$(basename $$f); \
+	  $$f -runs=$(FUZZ_RUNS) -max_total_time=60 -print_final_stats=0 \
+	      $(FUZZ_CORPUS)/$$(basename $$f) tests/fixtures 2>&1 | tail -3; \
+	done; \
+	echo "fuzz-run: ok"
 
 # Build and gate on every Linux image CI uses, through the host's Docker
 # daemon. `make cross IMAGES=el8` for one.
@@ -280,13 +406,18 @@ plan-serve:
 	npx -y @agent-native/core@latest plan local serve \
 	    --dir plans/pam-ssoossh-c --kind plan --port 8787
 
+MANDIR ?= /usr/local/share/man
+
 install: $(MODULE)
 	@test -n "$(SECURITYDIR)" || { \
 	  echo "install: no PAM module directory found on this system;" \
 	       "pass SECURITYDIR=<dir>" >&2; exit 1; }
 	install -d $(DESTDIR)$(SECURITYDIR)
 	install -m 0644 $(MODULE) $(DESTDIR)$(SECURITYDIR)/pam_ssoossh.so
+	install -d $(DESTDIR)$(MANDIR)/man8
+	install -m 0644 docs/pam_ssoossh.8 $(DESTDIR)$(MANDIR)/man8/
 	@echo "installed $(DESTDIR)$(SECURITYDIR)/pam_ssoossh.so"
+	@echo "installed $(DESTDIR)$(MANDIR)/man8/pam_ssoossh.8"
 
 clean:
 	rm -rf $(BUILD) pam_ssoossh.so pam_ssoossh.bundle tests/pamtest \
@@ -294,10 +425,20 @@ clean:
 
 help:
 	@echo "make            build $(MODULE) for $(UNAME)"
-	@echo "make test       build and check the exported symbol set"
+	@echo "make test       symbol gate, load gate, and the unit suite"
 	@echo "make san        rebuild with ASan and UBSan"
 	@echo "make tests/pamtest"
 	@echo "                build the manual PAM harness (needs libpam-misc on Linux)"
+	@echo "make e2e        the whole flow against a stub server (needs root)"
+	@echo "make fuzz-run   libFuzzer over every parser that reads network bytes"
+	@echo "make cross      build and gate on every Linux image CI uses"
+	@echo "make lint       actionlint, shellcheck, clang-format, cppcheck"
+	@echo "make ci-local   run the CI workflow locally with nektos/act"
+	@echo "make differential"
+	@echo "                the same scenarios against the Go module too"
+	@echo "make check-stdio"
+	@echo "                assert the module writes to neither stdout nor stderr"
+	@echo "make check-size assert the stripped module is under $(SIZE_LIMIT) bytes"
 	@echo "make install    install into $(if $(SECURITYDIR),$(SECURITYDIR),<no PAM module dir found>)"
 	@echo ""
 	@echo "VERSION=$(VERSION)"

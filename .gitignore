@@ -13,6 +13,7 @@
 /pam_ssoossh.bundle
 /tests/pamtest
 /tests/loadtest
+/tests/unit_tests
 
 # Third-party skill checkouts, which carry their own .git.
 /.claude/skills

@@ -17,5 +17,14 @@ int suite_der(void);
 int suite_crypto(void);
 int suite_sshkey(void);
 int suite_sshcert(void);
+int suite_json(void);
+int suite_sse(void);
+int suite_principals_map(void);
+int suite_checks(void);
+int suite_localaddrs(void);
+int suite_console(void);
+#ifndef __APPLE__
+int suite_qr(void);
+#endif
 
 #endif /* SSOOSSH_TEST_SUITES_H */

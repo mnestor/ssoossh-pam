@@ -209,16 +209,16 @@ bool ssoossh_der_spki_ec(ssoossh_curve curve, const uint8_t *point,
                 point, point_len, out, out_cap, out_len);
 }
 
-bool ssoossh_der_spki_rsa(const uint8_t *e, size_t e_len, const uint8_t *n,
-                          size_t n_len, uint8_t *out, size_t out_cap,
-                          size_t *out_len)
+bool ssoossh_der_rsa_pkcs1(const uint8_t *e, size_t e_len, const uint8_t *n,
+                           size_t n_len, uint8_t *out, size_t out_cap,
+                           size_t *out_len)
 {
     /* RSAPublicKey ::= SEQUENCE { modulus INTEGER, publicExponent INTEGER }
-     * -- note the order is n then e, the reverse of the SSH blob's. */
+     * -- note the order is n then e, the reverse of the SSH blob's. Getting
+     * this backwards produces a key that parses and verifies nothing. */
     uint8_t inner[1200];
-    uint8_t key[1216];
-    der_wr i, k;
-    size_t inner_len, key_len;
+    der_wr i, w;
+    size_t inner_len;
 
     der_init(&i, inner, sizeof(inner));
     der_integer(&i, n, n_len);
@@ -227,9 +227,20 @@ bool ssoossh_der_spki_rsa(const uint8_t *e, size_t e_len, const uint8_t *n,
         return false;
     }
 
-    der_init(&k, key, sizeof(key));
-    der_tlv(&k, 0x30, inner, inner_len);
-    if (!der_finish(&k, &key_len)) {
+    der_init(&w, out, out_cap);
+    der_tlv(&w, 0x30, inner, inner_len);
+    return der_finish(&w, out_len);
+}
+
+bool ssoossh_der_spki_rsa(const uint8_t *e, size_t e_len, const uint8_t *n,
+                          size_t n_len, uint8_t *out, size_t out_cap,
+                          size_t *out_len)
+{
+    uint8_t key[1216];
+    size_t key_len;
+
+    if (!ssoossh_der_rsa_pkcs1(e, e_len, n, n_len, key, sizeof(key),
+                               &key_len)) {
         return false;
     }
 

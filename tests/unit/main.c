@@ -30,10 +30,23 @@ static const struct {
     const char *name;
     int (*fn)(void);
 } suites[] = {
-    {"duration", suite_duration}, {"args", suite_args},
-    {"sanitize", suite_sanitize}, {"sshwire", suite_sshwire},
-    {"der", suite_der},           {"crypto", suite_crypto},
-    {"sshkey", suite_sshkey},     {"sshcert", suite_sshcert},
+    {"duration", suite_duration},
+    {"args", suite_args},
+    {"sanitize", suite_sanitize},
+    {"sshwire", suite_sshwire},
+    {"der", suite_der},
+    {"crypto", suite_crypto},
+    {"sshkey", suite_sshkey},
+    {"sshcert", suite_sshcert},
+    {"json", suite_json},
+    {"sse", suite_sse},
+    {"principals-map", suite_principals_map},
+    {"checks", suite_checks},
+    {"localaddrs", suite_localaddrs},
+    {"console", suite_console},
+#ifndef __APPLE__
+    {"qr", suite_qr},
+#endif
 };
 
 int main(int argc, char **argv)

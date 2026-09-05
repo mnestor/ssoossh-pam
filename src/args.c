@@ -404,7 +404,7 @@ ssoossh_args_status ssoossh_args_parse(int argc, const char **argv,
     memset(cfg, 0, sizeof(*cfg));
     cfg->skew_tolerance = SSOOSSH_DEFAULT_SKEW_TOLERANCE;
     cfg->timeout = SSOOSSH_DEFAULT_TIMEOUT;
-    cfg->mode = SSOOSSH_MODE_SUDO;
+    cfg->mode = SSOOSSH_MODE_AUTO;
     if (bad_arg != NULL) {
         *bad_arg = NULL;
     }
@@ -473,18 +473,25 @@ ssoossh_args_status ssoossh_args_parse(int argc, const char **argv,
              * sudo is the one thing this module never does. */
             cfg->debug = !(ascii_eq_fold(value, "false") || value[0] == '\0');
         } else if (strcmp(key, "mode") == 0) {
-            if (strcmp(value, "sudo") == 0) {
+            if (strcmp(value, "auto") == 0) {
+                cfg->mode = SSOOSSH_MODE_AUTO;
+            } else if (strcmp(value, "sudo") == 0) {
                 cfg->mode = SSOOSSH_MODE_SUDO;
             } else if (strcmp(value, "console") == 0) {
+#ifdef __APPLE__
                 /* Recognized and refused, which is not the same as
-                 * unrecognized: console mode is a designed flow whose
-                 * server half does not exist yet. Refusing it here means a
-                 * pam.d line written against a future build fails loudly
-                 * instead of authenticating through the sudo flow. */
+                 * unrecognized. Console mode is not compiled into the macOS
+                 * build -- that platform ships no artifact, so a console
+                 * login there is scope with no user. Saying so beats
+                 * running the browser flow under a name that asked for
+                 * something else. */
                 if (bad_arg != NULL) {
                     *bad_arg = arg;
                 }
                 return SSOOSSH_ARGS_CONSOLE_UNSUPPORTED;
+#else
+                cfg->mode = SSOOSSH_MODE_CONSOLE;
+#endif
             } else {
                 if (bad_arg != NULL) {
                     *bad_arg = arg;

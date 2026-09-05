@@ -22,8 +22,11 @@ extern int t_failures;
 
 /* Reports one failure. The format is deliberately printf-shaped so a case
  * can say what it compared, not just that it did. */
+/* nonnull as well as format: gcc 15 otherwise reasons its way to a
+ * "null format string" on the inlined call sites and fails the build under
+ * -Werror. Every caller passes a literal, so saying so costs nothing. */
 void t_failf(const char *file, int line, const char *fmt, ...)
-    __attribute__((format(printf, 3, 4)));
+    __attribute__((format(printf, 3, 4))) __attribute__((nonnull(3)));
 
 #define T_CHECK(cond)                                                          \
     do {                                                                       \

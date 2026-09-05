@@ -37,13 +37,22 @@ typedef int64_t ssoossh_duration;
 #define SSOOSSH_MAX_URL 512
 #define SSOOSSH_MAX_PATH 4096
 
-/* Which flow the module runs. `mode` is fail-closed from the first commit:
- * an unrecognized value is an error rather than a silent fall back to the
- * sudo flow, so that a pam.d line written for a future console-capable
- * build does not quietly authenticate through the wrong path on a build
- * that predates it. See the plan's console-mode seams. */
+/* Which flow the module runs.
+ *
+ * `auto` is the default and the interesting one: it picks the console flow
+ * when the login is at a console with no browser reachable from it, and the
+ * browser flow otherwise. Which of the two is right is a property of where
+ * someone is sitting, not something an operator can predict per host when
+ * they write the pam.d line -- the same host answers differently for a
+ * serial console and for an SSH session. src/console.c decides.
+ *
+ * `sudo` and `console` force one flow. Both are still fail-closed: an
+ * unrecognized value is an error rather than a silent fall back, so a
+ * pam.d line written for a future build does not quietly authenticate
+ * through a path it did not ask for. */
 typedef enum {
-    SSOOSSH_MODE_SUDO = 0,
+    SSOOSSH_MODE_AUTO = 0,
+    SSOOSSH_MODE_SUDO,
     SSOOSSH_MODE_CONSOLE,
 } ssoossh_mode;
 
@@ -73,6 +82,8 @@ typedef struct {
 typedef enum {
     SSOOSSH_ARGS_OK = 0,
     SSOOSSH_ARGS_BAD_MODE,
+    /* mode=console on a build that does not carry it: macOS, which ships
+     * no artifact and where a console login is scope with no user. */
     SSOOSSH_ARGS_CONSOLE_UNSUPPORTED,
     SSOOSSH_ARGS_VALUE_TOO_LONG,
 } ssoossh_args_status;
