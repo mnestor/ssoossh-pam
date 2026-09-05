@@ -28,7 +28,10 @@
 #                           ID Application" identity for the module and a
 #                           "Developer ID Installer" one for the package;
 #                           the second may instead come from
-#   QUILL_INSTALLER_P12     a PKCS#12 holding the Installer identity, base64
+#   QUILL_INSTALLER_P12     a PKCS#12 holding the Installer identity, base64.
+#                           The identity, not the certificate on its own:
+#                           an export without the private key imports
+#                           cleanly and then signs nothing
 #   QUILL_SIGN_PASSWORD     the password of both files
 #   QUILL_NOTARY_ISSUER     App Store Connect API issuer id
 #   QUILL_NOTARY_KEY_ID     App Store Connect API key id
@@ -139,17 +142,22 @@ if [ -n "${QUILL_SIGN_P12:-}" ]; then
     security create-keychain -p "$kcpass" "$keychain"
     security set-keychain-settings "$keychain"
     security unlock-keychain -p "$kcpass" "$keychain"
+    # `security import` says "1 identity imported." for a certificate with
+    # its private key and "1 certificate imported." for one without, and a
+    # certificate on its own is no use here: it imports without complaint
+    # and then signs nothing. That line is the whole diagnosis when the
+    # check below fails, so it is not thrown away.
     materialise "$QUILL_SIGN_P12" "$work/sign.p12"
+    echo "macos: QUILL_SIGN_P12:"
     security import "$work/sign.p12" -k "$keychain" -f pkcs12 \
         -P "${QUILL_SIGN_PASSWORD:-}" \
-        -T /usr/bin/codesign -T /usr/bin/productsign -T /usr/bin/security \
-        >/dev/null
+        -T /usr/bin/codesign -T /usr/bin/productsign -T /usr/bin/security
     if [ -n "${QUILL_INSTALLER_P12:-}" ]; then
         materialise "$QUILL_INSTALLER_P12" "$work/installer.p12"
+        echo "macos: QUILL_INSTALLER_P12:"
         security import "$work/installer.p12" -k "$keychain" -f pkcs12 \
             -P "${QUILL_SIGN_PASSWORD:-}" \
-            -T /usr/bin/codesign -T /usr/bin/productsign -T /usr/bin/security \
-            >/dev/null
+            -T /usr/bin/codesign -T /usr/bin/productsign -T /usr/bin/security
     fi
     security set-key-partition-list -S apple-tool:,apple: -s \
         -k "$kcpass" "$keychain" >/dev/null
@@ -166,6 +174,13 @@ if [ -n "${QUILL_SIGN_P12:-}" ]; then
         echo "macos: no valid Developer ID Installer identity in QUILL_SIGN_P12 or QUILL_INSTALLER_P12;" \
             "Gatekeeper would refuse the package, so it is not built" >&2
         security find-identity "$keychain" >&2
+        # An identity is a certificate *and* its private key. The
+        # certificates are listed as well because the Installer one
+        # appearing here and not above says which half is missing: the
+        # export left the key behind.
+        echo "  certificates in the keychain:" >&2
+        security find-certificate -a "$keychain" |
+            sed -n 's/^ *"labl"<blob>=/    /p' >&2
         exit 1
     fi
 fi
