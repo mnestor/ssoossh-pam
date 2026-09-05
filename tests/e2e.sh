@@ -32,6 +32,11 @@ stub_pid=""
 
 log() { printf '%s\n' "$*" >&2; }
 
+# A scenario this platform cannot run, said out loud rather than failed or
+# silently dropped: a suite that quietly skips is a suite nobody notices
+# has stopped measuring.
+skip() { printf '  %-18s SKIP (%s)\n' "$1" "$2"; }
+
 cleanup() {
     if [ -n "$stub_pid" ]; then kill "$stub_pid" 2>/dev/null || true; fi
     if [ -n "$sink_pid" ]; then kill "$sink_pid" 2>/dev/null || true; fi
@@ -63,7 +68,11 @@ chmod 755 "$workdir"
 #            If it is not running, the sink binds /var/run/log the same way.
 #   macOS    there is no socket to bind: syslog(3) feeds the unified logging
 #            system. `log stream` is the way back out, and it plays the same
-#            role the sink does elsewhere.
+#            role the sink does elsewhere. --info and --debug are not
+#            optional: syslog's LOG_INFO and LOG_DEBUG land at those os_log
+#            levels, and `log stream` hides both by default -- which is
+#            every "successful authentication" line and every debug line
+#            this suite matches on.
 os="$(uname -s)"
 logfile=""
 sink_pid=""
@@ -72,8 +81,12 @@ case "$os" in
 Darwin)
     logfile="$workdir/syslog.log"
     : > "$logfile"
-    log stream --style compact --predicate 'process == "pamtest"' \
-        > "$logfile" 2>/dev/null &
+    # By path, not by name: this script's log() function above shadows
+    # log(1), and a bare `log stream` here ran that function, wrote its
+    # arguments to stderr, and returned -- leaving no sink at all and every
+    # scenario failing its syslog match.
+    /usr/bin/log stream --style compact --info --debug \
+        --predicate 'process == "pamtest"' > "$logfile" 2>/dev/null &
     sink_pid=$!
     # log stream takes a moment to attach; nothing before that is captured.
     sleep 2
@@ -437,12 +450,25 @@ for s in "${scenarios[@]}"; do
         # The module's own timeout ends this, not the server.
         run slow slow 0 'timed out waiting for approval' 3s '' --hold 60 ;;
     console)
-        run console console 0 'console flow' 15s 'mode=console' ;;
+        # Console mode is compiled in on Linux and FreeBSD only; on macOS
+        # mode=console is refused at argument-parse time, by design.
+        if [ "$os" = Darwin ]; then
+            skip console 'console mode is not compiled in on macOS'
+        else
+            run console console 0 'console flow' 15s 'mode=console'
+        fi ;;
     cancel-requisite)
         run_cancel requisite cancel-requisite ;;
     cancel-bracketed)
-        run_cancel '[success=done ignore=ignore default=die]' \
-            cancel-bracketed ;;
+        # The [success=... default=...] control syntax is Linux-PAM's own.
+        # OpenPAM (FreeBSD, macOS) has only the four keywords, and refuses
+        # the stack at pam_start.
+        if [ "$os" != Linux ]; then
+            skip cancel-bracketed 'bracketed controls are Linux-PAM only'
+        else
+            run_cancel '[success=done ignore=ignore default=die]' \
+                cancel-bracketed
+        fi ;;
     *)
         log "e2e: unknown scenario $s"
         failures=$((failures + 1)) ;;

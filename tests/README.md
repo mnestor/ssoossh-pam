@@ -157,6 +157,17 @@ and `PAM_IGNORE` is not, and both are run — because the documentation offers
 them, and a dispatcher that treats `PAM_IGNORE` as a failure under one of
 them is a documentation bug worth finding before it is published.
 
+`tests/pamtest` blocks SIGINT before `pam_authenticate`, because sudo does:
+it runs its whole policy check with the tty signals blocked and re-raises
+them afterwards, so a Ctrl-C only reaches the module if the module unblocks
+it. A cancel that passes here is a cancel that works under sudo, not just
+under a harness that happens to leave the signal deliverable.
+
+Two scenarios are platform-bound and say so rather than fail: the bracketed
+control syntax is Linux-PAM's, so `cancel-bracketed` is `SKIP` on OpenPAM
+(FreeBSD, macOS), and console mode is not compiled in on macOS, so `console`
+is `SKIP` there.
+
 ## `sudo make differential` — the two modules, side by side
 
 Two implementations of one protocol diverge in the cases nobody tests. This
