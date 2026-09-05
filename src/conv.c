@@ -135,7 +135,10 @@ int ssoossh_conv(pam_handle_t *pamh, int style, const char *text,
 
     memset(&msg, 0, sizeof(msg));
     msg.msg_style = style;
-    msg.msg = text;
+    /* XSSO's struct pam_message declares msg as char *, not const char *,
+     * even though the conversation function must not modify it; msgs itself
+     * is an array of const struct pam_message *, so this stays read-only. */
+    msg.msg = (char *)text;
     msgs[0] = &msg;
 
     rc = conv->conv(1, msgs, &resp, conv->appdata_ptr);

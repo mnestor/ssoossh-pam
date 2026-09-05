@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 
 #include <curl/curl.h>
@@ -82,6 +83,66 @@ int64_t ssoossh_monotonic_ms(void)
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
+#ifdef __APPLE__
+/* curl's SecureTransport backend rejects the CURLOPT_SSLVERSION floor pin
+ * outright with CURLE_NOT_BUILT_IN (curl issue #2969: the "or later"
+ * minimum-version form works for OpenSSL but not for Secure Transport or
+ * schannel), even though the same backend negotiates TLS 1.3 fine when
+ * left to its own defaults. So on macOS the pin is skipped and the floor
+ * is verified after the fact instead, from curl's own connection trace --
+ * the one place this backend does report what it actually negotiated. */
+typedef struct {
+    char version[16];
+} tls_probe;
+
+static int on_debug_text(CURL *h, curl_infotype type, char *data,
+                         size_t size, void *userptr)
+{
+    static const char needle[] = "SSL connection using ";
+    tls_probe *probe = userptr;
+    size_t i;
+
+    (void)h;
+    if (type != CURLINFO_TEXT || probe->version[0] != '\0') {
+        return 0;
+    }
+    if (size < sizeof(needle) - 1) {
+        return 0;
+    }
+    for (i = 0; i + (sizeof(needle) - 1) <= size; i++) {
+        size_t start, j;
+
+        if (memcmp(data + i, needle, sizeof(needle) - 1) != 0) {
+            continue;
+        }
+        start = i + sizeof(needle) - 1;
+        for (j = 0; start + j < size && j + 1 < sizeof(probe->version); j++) {
+            char c = data[start + j];
+            if (c == ' ' || c == '\r' || c == '\n') {
+                break;
+            }
+            probe->version[j] = c;
+        }
+        probe->version[j] = '\0';
+        break;
+    }
+    return 0;
+}
+
+/* No handshake, nothing to enforce: a plain-http URL (the e2e stub, a
+ * local dev server) never makes curl print the "SSL connection using"
+ * line the probe looks for, so an empty probe means "no TLS was
+ * attempted" rather than "TLS was attempted and came in under the
+ * floor" -- and only the second one is a downgrade worth refusing. */
+static bool tls_floor_met(const tls_probe *probe, const char *url)
+{
+    if (strncasecmp(url, "https://", 8) != 0) {
+        return true;
+    }
+    return strcmp(probe->version, "TLSv1.3") == 0;
+}
+#endif
+
 /* Applied to every handle. Each line here is load-bearing:
  *
  *   NOSIGNAL, because libcurl otherwise uses SIGALRM and siglongjmp for its
@@ -91,7 +152,9 @@ int64_t ssoossh_monotonic_ms(void)
  *   No FOLLOWLOCATION: an authentication flow must not silently follow a
  *   redirect to another origin.
  *
- *   TLS 1.3 as the floor, matching the Go client's MinVersion. */
+ *   TLS 1.3 as the floor, matching the Go client's MinVersion -- pinned
+ *   here on every platform except macOS, where it is verified after the
+ *   connection instead; see tls_floor_met above. */
 static void apply_common(CURL *h, bool insecure)
 {
     static const char *const user_agent =
@@ -100,7 +163,9 @@ static void apply_common(CURL *h, bool insecure)
 
     curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 0L);
+#ifndef __APPLE__
     curl_easy_setopt(h, CURLOPT_SSLVERSION, (long)CURL_SSLVERSION_TLSv1_3);
+#endif
     curl_easy_setopt(h, CURLOPT_USERAGENT, user_agent);
     curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT_MS, 10000L);
     curl_easy_setopt(h, CURLOPT_TCP_NODELAY, 1L);
@@ -182,6 +247,9 @@ ssoossh_http_result ssoossh_httpc_post_json(const char *url, const char *body,
     progress_ctx prog = {deadline_ms, false, false};
     ssoossh_http_result result = SSOOSSH_HTTP_INTERNAL;
     CURLcode rc;
+#ifdef __APPLE__
+    tls_probe probe = {{0}};
+#endif
 
     *resp_len = 0;
     *status = 0;
@@ -215,12 +283,24 @@ ssoossh_http_result ssoossh_httpc_post_json(const char *url, const char *body,
     curl_easy_setopt(h, CURLOPT_NOPROGRESS, 0L);
     curl_easy_setopt(h, CURLOPT_XFERINFOFUNCTION, on_progress);
     curl_easy_setopt(h, CURLOPT_XFERINFODATA, &prog);
+#ifdef __APPLE__
+    curl_easy_setopt(h, CURLOPT_VERBOSE, 1L);
+    curl_easy_setopt(h, CURLOPT_DEBUGFUNCTION, on_debug_text);
+    curl_easy_setopt(h, CURLOPT_DEBUGDATA, &probe);
+#endif
 
     rc = curl_easy_perform(h);
     curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, status);
     *resp_len = sink.len;
 
     if (rc == CURLE_OK) {
+#ifdef __APPLE__
+        if (!tls_floor_met(&probe, url)) {
+            ssoossh_errf("negotiated %s, refusing (floor is TLS 1.3)",
+                         probe.version[0] != '\0' ? probe.version : "unknown");
+            result = SSOOSSH_HTTP_TRANSPORT;
+        } else
+#endif
         result = (*status >= 200 && *status < 300) ? SSOOSSH_HTTP_OK
                                                    : SSOOSSH_HTTP_STATUS;
     } else if (prog.cancelled) {
@@ -317,6 +397,9 @@ static ssoossh_http_result run_stream(const char *url, bool insecure,
     stream_ctx sc;
     ssoossh_http_result result = SSOOSSH_HTTP_INTERNAL;
     int running = 1;
+#ifdef __APPLE__
+    tls_probe probe = {{0}};
+#endif
 
     memset(&sc, 0, sizeof(sc));
     sc.sse = sse;
@@ -347,6 +430,11 @@ static ssoossh_http_result run_stream(const char *url, bool insecure,
     curl_easy_setopt(h, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, write_stream);
     curl_easy_setopt(h, CURLOPT_WRITEDATA, &sc);
+#ifdef __APPLE__
+    curl_easy_setopt(h, CURLOPT_VERBOSE, 1L);
+    curl_easy_setopt(h, CURLOPT_DEBUGFUNCTION, on_debug_text);
+    curl_easy_setopt(h, CURLOPT_DEBUGDATA, &probe);
+#endif
 
     if (curl_multi_add_handle(multi, h) != CURLM_OK) {
         goto done;
@@ -414,6 +502,13 @@ static ssoossh_http_result run_stream(const char *url, bool insecure,
         }
         curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, status);
 
+#ifdef __APPLE__
+        if (!tls_floor_met(&probe, url)) {
+            ssoossh_errf("negotiated %s, refusing (floor is TLS 1.3)",
+                         probe.version[0] != '\0' ? probe.version : "unknown");
+            result = SSOOSSH_HTTP_TRANSPORT;
+        } else
+#endif
         if (sc.sse_stopped) {
             /* A callback said it had what it needed. The write callback
              * returned short to stop the transfer, which libcurl reports as

@@ -28,3 +28,7 @@
 
 # Agent scratch written by hooks.
 /.claude/pending-changes.md
+
+# Local signing/notarization secrets: signing cert, notary API key, nfpm
+# passphrase, GitHub token. Never commit this.
+/.env.local
