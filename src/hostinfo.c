@@ -60,6 +60,13 @@ static void read_first_line(const char *path, char *out, size_t cap)
 }
 #endif
 
+/* Linux only, and deliberately. The value there names a distribution that
+ * uname cannot -- "Debian GNU/Linux 12 (bookworm)" beside "Linux 6.12" --
+ * which is the whole reason to read it. FreeBSD ships an os-release too,
+ * but its PRETTY_NAME is "FreeBSD 14.2-RELEASE", exactly what uname already
+ * says, so reading it there produced "FreeBSD 14.2-RELEASE FreeBSD
+ * 14.2-RELEASE". macOS has no such file at all. */
+#if defined(__linux__)
 /* The value of PRETTY_NAME in /etc/os-release, unquoted; empty when the
  * file or the key is absent. os-release values may be bare, double-quoted
  * or single-quoted, and this reads all three without interpreting escapes,
@@ -94,12 +101,16 @@ static void read_pretty_name(char *out, size_t cap)
     }
     fclose(f);
 }
+#endif
 
 static void read_os(char *out, size_t cap)
 {
     struct utsname u;
 
+    out[0] = '\0';
+#if defined(__linux__)
     read_pretty_name(out, cap);
+#endif
     if (uname(&u) != 0) {
         u.sysname[0] = '\0';
         u.release[0] = '\0';

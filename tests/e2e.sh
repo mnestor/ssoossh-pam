@@ -35,6 +35,7 @@ port="$port_base"
 service="ssoossh-e2e"
 workdir=""
 stub_pid=""
+syslog_conf_saved=""
 
 log() { printf '%s\n' "$*" >&2; }
 
@@ -43,9 +44,47 @@ log() { printf '%s\n' "$*" >&2; }
 # has stopped measuring.
 skip() { printf '  %-18s SKIP (%s)\n' "$1" "$2"; }
 
+# Whether an sshd is anywhere above this process -- the same question
+# ssoossh_ssh_session_ancestry() asks of the process table, matched on the
+# same "sshd" prefix, so that a scenario needing a session that did not
+# arrive over SSH can say so rather than fail.
+#
+# The SSH_* variables do not settle it on their own: sudo scrubs them, so
+# `sudo make e2e` on a machine driven over ssh -- a FreeBSD CI VM, say --
+# looks local to the environment and has an sshd ancestor regardless.
+# comm is basenamed because macOS ps prints the full path where Linux and
+# FreeBSD print the name.
+under_sshd() {
+    local pid=$$ ppid comm
+
+    for _ in $(seq 1 64); do
+        [ "$pid" -gt 1 ] || return 1
+        read -r ppid comm < <(ps -o ppid=,comm= -p "$pid" 2>/dev/null) ||
+            return 1
+        [ -n "${ppid:-}" ] || return 1
+        case "${comm##*/}" in sshd*) return 0 ;; esac
+        [ "$ppid" != "$pid" ] || return 1
+        pid="$ppid"
+    done
+    return 1
+}
+
+# SIGHUP is what syslogd re-reads its configuration on; service(8) is the
+# spelling that knows where the pid file is.
+reload_syslogd() {
+    service syslogd reload >/dev/null 2>&1 ||
+        pkill -HUP syslogd >/dev/null 2>&1 || true
+    # The reload is asynchronous and the next scenario writes immediately.
+    sleep 1
+}
+
 cleanup() {
     if [ -n "$stub_pid" ]; then kill "$stub_pid" 2>/dev/null || true; fi
     if [ -n "$sink_pid" ]; then kill "$sink_pid" 2>/dev/null || true; fi
+    if [ -n "$syslog_conf_saved" ]; then
+        cat "$syslog_conf_saved" > /etc/syslog.conf
+        reload_syslogd
+    fi
     if [ -n "$workdir" ]; then rm -rf "$workdir"; fi
     rm -f "/etc/pam.d/$service"
 }
@@ -70,8 +109,10 @@ chmod 755 "$workdir"
 #            container has no daemon at all, so tests/logsink.py binds the
 #            socket instead.
 #   FreeBSD  the socket is /var/run/log, and syslogd runs by default, filing
-#            LOG_AUTHPRIV into /var/log/auth.log per the stock syslog.conf.
-#            If it is not running, the sink binds /var/run/log the same way.
+#            LOG_AUTHPRIV into /var/log/auth.log per the stock syslog.conf --
+#            but only at info and above, so the run adds authpriv.debug for
+#            its own duration. If syslogd is not running, the sink binds
+#            /var/run/log the same way.
 #   macOS    there is no socket to bind: syslog(3) feeds the unified logging
 #            system. `log stream` is the way back out, and it plays the same
 #            role the sink does elsewhere. --info and --debug are not
@@ -106,6 +147,24 @@ Darwin)
 
     if [ -S "$syslog_socket" ]; then
         logfile=/var/log/auth.log
+        # FreeBSD's stock syslog.conf files authpriv at info and above, so
+        # every LOG_DEBUG line is dropped before it reaches auth.log -- and
+        # the lines that prove a decision was reached the intended way,
+        # rather than merely reached, are debug ones: "authorized via
+        # principals-map" is the scenario that caught this. Add the level
+        # for the length of the run and put the file back in cleanup.
+        #
+        # Appended rather than dropped into /etc/syslog.d because that
+        # directory is only read if the stock conf still includes it, and a
+        # rule that silently does not apply is worse here than an edit that
+        # is undone. Linux's rsyslog files authpriv.* already, so this is
+        # FreeBSD's alone.
+        if [ "$os" = FreeBSD ]; then
+            syslog_conf_saved="$workdir/syslog.conf.orig"
+            cp /etc/syslog.conf "$syslog_conf_saved"
+            printf 'authpriv.debug\t/var/log/auth.log\n' >> /etc/syslog.conf
+            reload_syslogd
+        fi
     else
         logfile="$workdir/syslog.log"
         : > "$logfile"
@@ -490,7 +549,8 @@ for s in "${scenarios[@]}"; do
         # leak in -- but a harness itself run over SSH has an sshd
         # ancestor the module will find regardless, so the case is
         # skipped there rather than reported as a module bug.
-        if [ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
+        if [ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ] ||
+           under_sshd; then
             skip ssh-only-local 'this harness is itself running over SSH'
         else
             pamtest_env="-u SSH_CONNECTION -u SSH_CLIENT -u SSH_TTY"

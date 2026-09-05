@@ -31,8 +31,9 @@ typedef struct {
     /* /etc/machine-id on Linux; kern.hostuuid on FreeBSD; gethostuuid(2)
      * on macOS. */
     char machine_id[SSOOSSH_HOSTINFO_CAP + 1];
-    /* "<PRETTY_NAME from /etc/os-release> <uname -s> <uname -r>", or just
-     * the uname half where there is no os-release. */
+    /* "<uname -s> <uname -r>", prefixed on Linux by PRETTY_NAME from
+     * /etc/os-release, which is the one platform where that names something
+     * uname does not. */
     char os[SSOOSSH_HOSTINFO_CAP + 1];
     /* This host's clock, RFC 3339 in UTC: "2026-09-05T13:04:05Z". */
     char client_time[32];

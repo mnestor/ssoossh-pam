@@ -247,18 +247,18 @@ jobs:
           export-env: false
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          QUILL_SIGN_P12: op://Github Actions/oqwo32gbo3ktrgutdcvzsr6msy/QUILL_SIGN_P12
-          QUILL_SIGN_PASSWORD: op://Github Actions/oqwo32gbo3ktrgutdcvzsr6msy/QUILL_SIGN_PASSWORD
-          QUILL_NOTARY_ISSUER: op://Github Actions/oqwo32gbo3ktrgutdcvzsr6msy/QUILL_NOTARY_ISSUER
-          QUILL_NOTARY_KEY_ID: op://Github Actions/oqwo32gbo3ktrgutdcvzsr6msy/QUILL_NOTARY_KEY_ID
-          QUILL_NOTARY_KEY: op://Github Actions/oqwo32gbo3ktrgutdcvzsr6msy/QUILL_NOTARY_KEY
+          QUILL_SIGN_P12: op://Github Actions/7cyb7oo2m4hp3cmqnxeexghy2a/QUILL_SIGN_P12
+          QUILL_SIGN_PASSWORD: op://Github Actions/7cyb7oo2m4hp3cmqnxeexghy2a/QUILL_SIGN_PASSWORD
+          QUILL_NOTARY_ISSUER: op://Github Actions/7cyb7oo2m4hp3cmqnxeexghy2a/QUILL_NOTARY_ISSUER
+          QUILL_NOTARY_KEY_ID: op://Github Actions/7cyb7oo2m4hp3cmqnxeexghy2a/QUILL_NOTARY_KEY_ID
+          QUILL_NOTARY_KEY: op://Github Actions/7cyb7oo2m4hp3cmqnxeexghy2a/QUILL_NOTARY_KEY
           # The package needs a "Developer ID Installer" identity as well as
           # the "Developer ID Application" one quill uses. If QUILL_SIGN_P12
           # does not hold both, put the Installer one in a second field
           # and uncomment this line and the one in the step below. A
           # reference to a field that does not exist fails the step, which
           # is why it is not simply always on.
-          QUILL_INSTALLER_P12: op://Github Actions/oqwo32gbo3ktrgutdcvzsr6msy/QUILL_INSTALLER_P12
+          QUILL_INSTALLER_P12: op://Github Actions/7cyb7oo2m4hp3cmqnxeexghy2a/QUILL_INSTALLER_P12
 
       - name: Installer package, signed and notarized
         env:

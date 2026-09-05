@@ -91,6 +91,14 @@ jobs:
             gmake check-size
             gmake san
 
+            # This image boots with kern.hostname empty -- syslog lines
+            # come through with a blank host field and gethostname(3)
+            # returns success and nothing. The module reports the host it
+            # is on, so an unnamed host means an empty "hostname" claim and
+            # context_check.py, rightly, fails the request body. Name it.
+            sudo hostname freebsd-ci
+            hostname
+
             # The whole flow, through a real PAM stack. syslogd runs by
             # default here and files LOG_AUTHPRIV into /var/log/auth.log.
             gmake
