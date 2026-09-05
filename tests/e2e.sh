@@ -19,6 +19,12 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/.." && pwd)"
+
+# GNU make, which is not the base `make` everywhere: FreeBSD's is bmake, and
+# it rejects --no-print-directory outright rather than ignoring it. A run
+# started through the Makefile inherits MAKE from it and so uses the same one
+# it was invoked with; run by hand, gmake is the name to look for first.
+make="${MAKE:-$(command -v gmake || echo make)}"
 # A base, not a port. Each scenario takes the next one, because reusing a
 # port means depending on the previous stub's listener being gone -- and
 # under load it is not, so the new scenario's requests reach a server that
@@ -134,11 +140,11 @@ chmod 644 "$workdir"/*.pub
 # and a pam.d entry takes an absolute path to the build directory instead.
 # That form is supported by every PAM implementation here and is the
 # documented way to test on macOS.
-module_file="$(make -C "$repo" --no-print-directory print-MODULE)"
-securitydir="$(make -C "$repo" --no-print-directory print-SECURITYDIR)"
+module_file="$("$make" -C "$repo" --no-print-directory print-MODULE)"
+securitydir="$("$make" -C "$repo" --no-print-directory print-SECURITYDIR)"
 
 if [ -n "$securitydir" ]; then
-    make -C "$repo" --no-print-directory install >/dev/null
+    "$make" -C "$repo" --no-print-directory install >/dev/null
     module_ref="pam_ssoossh.so"
 else
     module_ref="$repo/$module_file"

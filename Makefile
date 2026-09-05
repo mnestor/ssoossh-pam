@@ -84,6 +84,13 @@ endif
 MODULE  := pam_ssoossh.so
 BUILD   := build
 
+# tests/e2e.sh and tests/differential.sh ask make for print-MODULE,
+# print-SECURITYDIR and install, and GNU make does not put MAKE in a recipe's
+# environment on its own. Exporting it means a script run from here uses the
+# same make that started it -- which on FreeBSD is gmake, not the bmake that
+# `make` names there and that would reject --no-print-directory.
+export MAKE
+
 # Sanitiser flags have to reach the link line of the shared object and of
 # the test binary, which have nothing else in common -- LDFLAGS proper
 # carries -shared and the version script, and an executable must inherit

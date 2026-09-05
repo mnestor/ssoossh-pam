@@ -27,6 +27,12 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/.." && pwd)"
+
+# GNU make, which is not the base `make` everywhere: FreeBSD's is bmake, and
+# it rejects --no-print-directory outright rather than ignoring it. A run
+# started through the Makefile inherits MAKE from it and so uses the same one
+# it was invoked with; run by hand, gmake is the name to look for first.
+make="${MAKE:-$(command -v gmake || echo make)}"
 port="${SSOOSSH_DIFF_PORT:-18447}"
 service="ssoossh-diff"
 go_module="${SSOOSSH_GO_MODULE:-}"
@@ -56,7 +62,7 @@ if [ -z "$go_module" ] || [ ! -f "$go_module" ]; then
     exit 2
 fi
 
-securitydir="$(make -C "$repo" --no-print-directory print-SECURITYDIR)"
+securitydir="$("$make" -C "$repo" --no-print-directory print-SECURITYDIR)"
 if [ -z "$securitydir" ] || [ ! -d "$securitydir" ]; then
     log "differential: no PAM module directory on this platform"
     log "differential: Linux only anyway -- the Go module hardcodes"
@@ -85,7 +91,7 @@ fi
 # load it is not.
 next_port() { port=$((port + 1)); }
 
-make -C "$repo" --no-print-directory install >/dev/null
+"$make" -C "$repo" --no-print-directory install >/dev/null
 install -m 0644 "$go_module" "$securitydir/pam_ssoossh_go.so"
 
 # wc -c rather than stat: BSD stat spells the same question -f%z, and this
