@@ -151,6 +151,11 @@ jobs:
           version: "14.2"
           run: |
             set -ex
+            # The image's package set is older than the repo, and pkg is
+            # content to install a curl built against a newer libssh2 than
+            # the one already on disk -- libcurl.so.4 then fails to resolve
+            # at dlopen time. Bring the image up to the repo first.
+            sudo pkg upgrade -y
             sudo pkg install -y gmake pkgconf curl bash python3
             got=$(tests/dist-target.sh)
             echo "image reports: $got"
@@ -320,11 +325,10 @@ jobs:
       # release, unsigned, and the log says so.
       #
       #   RELEASE_GPG_PRIVATE_KEY   armored OpenPGP private key; signs the
-      #                             deb and rpm packages and SHA256SUMS
+      #                             deb and rpm packages, SHA256SUMS, and
+      #                             the apk -- one release key, not two.
+      #                             See packaging/README.md
       #   RELEASE_GPG_PASSPHRASE    its passphrase, if any
-      #   RELEASE_APK_PRIVATE_KEY   RSA private key, PEM; signs the apk.
-      #                             Alpine does not use OpenPGP, so this is
-      #                             a second key -- see packaging/README.md
       - name: Signing keys
         env:
           GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
@@ -344,7 +348,7 @@ jobs:
             echo "PKG_APK_KEY_FILE=$keys/apk.pem" >> "$GITHUB_ENV"
             echo "apk: signing with the release key"
           else
-            echo "apk: RELEASE_APK_PRIVATE_KEY is not set; the apk will be unsigned"
+            echo "apk: RELEASE_GPG_PRIVATE_KEY is not set; the apk will be unsigned"
           fi
           echo "SIGNING_KEYS=$keys" >> "$GITHUB_ENV"
 
