@@ -25,6 +25,7 @@
 
 #include "crypto.h"
 #include "der.h"
+#include "ed25519_kat.h"
 #include "log.h"
 #include "sshwire.h"
 
@@ -73,9 +74,22 @@ static bool library_fips(void)
 #endif
 }
 
-const char *ssoossh_crypto_fips_state(void)
+/* Read once per process: neither the kernel flag nor the library's mode
+ * changes while sudo is running, and the version line asks on every
+ * authentication. */
+static pthread_once_t fips_once = PTHREAD_ONCE_INIT;
+static ssoossh_fips_state fips_state;
+
+static void fips_init(void)
 {
-    return (kernel_fips() || library_fips()) ? "on" : "off";
+    fips_state =
+        (kernel_fips() || library_fips()) ? SSOOSSH_FIPS_ON : SSOOSSH_FIPS_OFF;
+}
+
+ssoossh_fips_state ssoossh_crypto_fips_state(void)
+{
+    (void)pthread_once(&fips_once, fips_init);
+    return fips_state;
 }
 
 /* OpenSSL's reason for the last failure, for a log line, and the queue
@@ -269,50 +283,51 @@ static ssoossh_verify_result verify_spki(const uint8_t *spki, size_t spki_len,
                                          size_t msg_len, const uint8_t *sig,
                                          size_t sig_len, const char **why);
 
-/* Ed25519, probed. RFC 8032 section 7.1 test 3 must verify and a copy with
- * one signature byte flipped must not; anything else -- including the
- * "unsupported" or "disallowed" OpenSSL raises when its FIPS provider has
- * no EdDSA -- means this host cannot verify ssh-ed25519 and says so once. */
+/* Ed25519, probed. The known answers in ed25519_kat.h must come out as
+ * they say -- the RFC 8032 vector verifies, a corrupted copy and an
+ * out-of-range S do not -- or this host cannot verify ssh-ed25519 and says
+ * so once. "Cannot" includes the "unsupported" or "disallowed" OpenSSL
+ * raises when its FIPS provider has no EdDSA. */
 static pthread_once_t ed25519_once = PTHREAD_ONCE_INIT;
 static bool ed25519_ok;
 
+static ssoossh_verify_result probe(const ssoossh_ed25519_vector *v,
+                                   const uint8_t *sig, const char **why)
+{
+    uint8_t spki[64];
+    size_t spki_len = 0;
+
+    if (!ssoossh_der_spki_ed25519(v->pk, sizeof(v->pk), spki, sizeof(spki),
+                                  &spki_len)) {
+        *why = "could not encode the probe key";
+        return SSOOSSH_VERIFY_ERROR;
+    }
+    return verify_spki(spki, spki_len, NULL, v->msg, v->msg_len, sig, 64, why);
+}
+
 static void ed25519_init(void)
 {
-    static const uint8_t pk[32] = {
-        0xfc, 0x51, 0xcd, 0x8e, 0x62, 0x18, 0xa1, 0xa3, 0x8d, 0xa4, 0x7e,
-        0xd0, 0x02, 0x30, 0xf0, 0x58, 0x08, 0x16, 0xed, 0x13, 0xba, 0x33,
-        0x03, 0xac, 0x5d, 0xeb, 0x91, 0x15, 0x48, 0x90, 0x80, 0x25};
-    static const uint8_t msg[2] = {0xaf, 0x82};
-    static const uint8_t sig[64] = {
-        0x62, 0x91, 0xd6, 0x57, 0xde, 0xec, 0x24, 0x02, 0x48, 0x27, 0xe6,
-        0x9c, 0x3a, 0xbe, 0x01, 0xa3, 0x0c, 0xe5, 0x48, 0xa2, 0x84, 0x74,
-        0x3a, 0x44, 0x5e, 0x36, 0x80, 0xd7, 0xdb, 0x5a, 0xc3, 0xac, 0x18,
-        0xff, 0x9b, 0x53, 0x8d, 0x16, 0xf2, 0x90, 0xae, 0x67, 0xf7, 0x60,
-        0x98, 0x4d, 0xc6, 0x59, 0x4a, 0x7c, 0x15, 0xe9, 0x71, 0x6e, 0xd2,
-        0x8d, 0xc0, 0x27, 0xbe, 0xce, 0xea, 0x1e, 0xc4, 0x0a};
-    uint8_t spki[64], flipped[64];
-    size_t spki_len = 0;
+    const ssoossh_ed25519_vector *kat = &SSOOSSH_ED25519_KAT;
     const char *why = "unknown";
-    const char *fips = ssoossh_crypto_fips_state();
+    const char *fips =
+        ssoossh_crypto_fips_state() == SSOOSSH_FIPS_ON ? "on" : "off";
+    uint8_t flipped[64];
 
-    if (!ssoossh_der_spki_ed25519(pk, sizeof(pk), spki, sizeof(spki),
-                                  &spki_len)) {
-        why = "could not encode the probe key";
-    } else if (verify_spki(spki, spki_len, NULL, msg, sizeof(msg), sig,
-                           sizeof(sig), &why) != SSOOSSH_VERIFY_OK) {
+    memcpy(flipped, kat->sig, sizeof(flipped));
+    flipped[SSOOSSH_ED25519_KAT_FLIP_BYTE] ^= 0x01;
+
+    if (probe(kat, kat->sig, &why) != SSOOSSH_VERIFY_OK) {
         /* why is set. */
+    } else if (probe(kat, flipped, &why) != SSOOSSH_VERIFY_BAD) {
+        why = "a corrupted signature was not refused";
+    } else if (probe(&SSOOSSH_ED25519_BIG_S, SSOOSSH_ED25519_BIG_S.sig, &why) !=
+               SSOOSSH_VERIFY_BAD) {
+        why = "a signature with S >= L was not refused";
     } else {
-        memcpy(flipped, sig, sizeof(flipped));
-        flipped[10] ^= 0x01;
-        if (verify_spki(spki, spki_len, NULL, msg, sizeof(msg), flipped,
-                        sizeof(flipped), &why) != SSOOSSH_VERIFY_BAD) {
-            why = "a corrupted signature was not refused";
-        } else {
-            ed25519_ok = true;
-            ssoossh_debugf("Ed25519: %s verified the known answer (fips: %s)",
-                           OpenSSL_version(OPENSSL_VERSION), fips);
-            return;
-        }
+        ed25519_ok = true;
+        ssoossh_debugf("Ed25519: %s verified the known answers (fips: %s)",
+                       OpenSSL_version(OPENSSL_VERSION), fips);
+        return;
     }
     ssoossh_warnf("Ed25519: %s cannot verify it here (%s; fips: %s); "
                   "ssh-ed25519 CAs cannot be used on this host",

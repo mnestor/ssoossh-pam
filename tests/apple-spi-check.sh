@@ -14,15 +14,17 @@
 #   the runtime  what *this* macOS does, by running the module's own
 #                Ed25519 suite through the real framework
 #
-#   tests/apple-spi-check.sh              the default SDK, then the runtime
-#   tests/apple-spi-check.sh --sdk PATH   one SDK only (no build needed)
-#   tests/apple-spi-check.sh --runtime    the runtime only
+#   tests/apple-spi-check.sh               the default SDK, then the runtime
+#   tests/apple-spi-check.sh --sdk PATH    one SDK only (no build needed)
+#   tests/apple-spi-check.sh --all-xcodes  every /Applications/Xcode*.app's
+#                                          SDK, betas included, then the
+#                                          runtime
+#   tests/apple-spi-check.sh --runtime     the runtime only
 #
-# Exit status: 0 when everything is as the backend expects; 1 when a symbol
-# is missing from the SDK or the runtime suite fails; 2 when the SPI has
-# turned up in a *public* header, which is good news that still needs a
-# human -- the dlsym should become a plain reference and this check should
-# change shape.
+# Exits non-zero when anything differs from what the backend expects: a
+# symbol missing from an SDK, the runtime suite failing, or the SPI turning
+# up in a *public* header -- good news, but still a change that needs a
+# human to swap the dlsym for the declaration.
 set -eu
 
 SYMS='_kSecAttrKeyTypeEd25519 _kSecKeyAlgorithmEdDSASignatureMessageCurve25519SHA512'
@@ -37,12 +39,16 @@ while [ $# -gt 0 ]; do
         sdk=$2
         shift 2
         ;;
+    --all-xcodes)
+        mode=all
+        shift
+        ;;
     --runtime)
         mode=runtime
         shift
         ;;
     *)
-        echo "usage: $0 [--sdk PATH | --runtime]" >&2
+        echo "usage: $0 [--sdk PATH | --all-xcodes | --runtime]" >&2
         exit 64
         ;;
     esac
@@ -84,7 +90,27 @@ check_sdk() {
         echo "  PUBLIC: the Ed25519 SPI is now declared in a public header." \
             "Replace the dlsym in src/crypto_darwin.c with the declaration and" \
             "update this check."
-        [ $rc -eq 0 ] && rc=2
+        rc=1
+    fi
+}
+
+# Every Xcode on the machine, which on a CI image includes the betas: the
+# SDK for the next macOS is checked while it is still a beta.
+check_all_xcodes() {
+    found=0
+    for app in /Applications/Xcode*.app; do
+        [ -d "$app" ] || continue
+        found=1
+        echo "== $app"
+        if sdk=$(DEVELOPER_DIR="$app" xcrun --show-sdk-path 2>/dev/null); then
+            check_sdk "$sdk"
+        else
+            echo "  no macOS SDK reachable through this Xcode; skipping"
+        fi
+    done
+    if [ $found -eq 0 ]; then
+        echo "apple-spi-check: no /Applications/Xcode*.app; checking the default SDK"
+        check_sdk "$(xcrun --show-sdk-path)"
     fi
 }
 
@@ -99,9 +125,7 @@ check_runtime() {
     # ssh-ed25519 on this platform; the ed25519 suite is the pinned
     # acceptance profile through the real framework.
     for suite in crypto ed25519; do
-        if ./tests/unit_tests "$suite"; then
-            :
-        else
+        if ! ./tests/unit_tests "$suite"; then
             echo "  FAILED: unit suite $suite"
             rc=1
         fi
@@ -115,15 +139,19 @@ sdk)
 runtime)
     check_runtime
     ;;
+all)
+    check_all_xcodes
+    check_runtime
+    ;;
 both)
     check_sdk "$(xcrun --show-sdk-path)"
     check_runtime
     ;;
 esac
 
-case $rc in
-0) echo "apple-spi-check: ok" ;;
-2) echo "apple-spi-check: SPI became public API -- act on it" ;;
-*) echo "apple-spi-check: FAILED" ;;
-esac
+if [ $rc -eq 0 ]; then
+    echo "apple-spi-check: ok"
+else
+    echo "apple-spi-check: FAILED"
+fi
 exit $rc

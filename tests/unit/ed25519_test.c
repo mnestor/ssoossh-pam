@@ -223,9 +223,7 @@ int suite_ed25519(void)
      * Security.framework SPI being absent or failing the backend's
      * self-test -- it is a failure, with the version line saying which. */
     if (!ssoossh_crypto_supports_key("ssh-ed25519")) {
-        const char *fips = ssoossh_crypto_fips_state();
-
-        if (fips != NULL && strcmp(fips, "on") == 0) {
+        if (ssoossh_crypto_fips_state() == SSOOSSH_FIPS_ON) {
             printf("  note: ssh-ed25519 unavailable under FIPS mode; "
                    "profile not measured\n");
             return t_failures;

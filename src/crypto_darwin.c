@@ -62,6 +62,7 @@
 
 #include "crypto.h"
 #include "der.h"
+#include "ed25519_kat.h"
 #include "log.h"
 #include "sshwire.h"
 
@@ -127,21 +128,12 @@ static ssoossh_verify_result verify_with(SecKeyRef key,
 #define ED25519_ALGORITHM_SYM                                                  \
     "kSecKeyAlgorithmEdDSASignatureMessageCurve25519SHA512"
 
-typedef enum {
-    /* Resolved and self-tested. */
-    ED25519_USABLE,
-    /* One of the symbols is not exported by this macOS. */
-    ED25519_ABSENT,
-    /* Resolved, but the known-answer test failed: same name, different
-     * behaviour. Refused. */
-    ED25519_SELFTEST_FAILED,
-} ed25519_state;
-
-static struct {
-    ed25519_state state;
-    CFStringRef key_type;
-    SecKeyAlgorithm algorithm;
-} ed25519 = {ED25519_ABSENT, NULL, NULL};
+/* What the probe found: the two constants when they resolved, whether
+ * they passed the known-answer test, and a word for the version line. */
+static CFStringRef ed25519_key_type;
+static SecKeyAlgorithm ed25519_algorithm;
+static bool ed25519_ok;
+static const char *ed25519_version = "Security.framework (no Ed25519 SPI)";
 
 static pthread_once_t ed25519_once = PTHREAD_ONCE_INIT;
 
@@ -166,7 +158,7 @@ static SecKeyRef ed25519_key(const uint8_t *pk, size_t pk_len)
     CFDataRef material;
     SecKeyRef key = NULL;
 
-    if (pk_len != 32 || ed25519.key_type == NULL) {
+    if (pk_len != 32 || ed25519_key_type == NULL) {
         return NULL;
     }
     attrs = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
@@ -175,7 +167,7 @@ static SecKeyRef ed25519_key(const uint8_t *pk, size_t pk_len)
     if (attrs == NULL) {
         return NULL;
     }
-    CFDictionarySetValue(attrs, kSecAttrKeyType, ed25519.key_type);
+    CFDictionarySetValue(attrs, kSecAttrKeyType, ed25519_key_type);
     CFDictionarySetValue(attrs, kSecAttrKeyClass, kSecAttrKeyClassPublic);
     material = data_view(pk, pk_len);
     if (material != NULL) {
@@ -197,66 +189,33 @@ static ssoossh_verify_result ed25519_verify_raw(const uint8_t *pk,
     if (key == NULL) {
         return SSOOSSH_VERIFY_ERROR;
     }
-    result = verify_with(key, ed25519.algorithm, msg, msg_len, sig, 64);
+    result = verify_with(key, ed25519_algorithm, msg, msg_len, sig, 64);
     CFRelease(key);
     return result;
 }
 
-/* The known-answer test. Three vectors, three required outcomes:
- *
- *   RFC 8032 §7.1 TEST 3, as published                -> OK
- *   the same with one signature byte flipped          -> BAD
- *   a signature whose S is not below the group order  -> BAD
- *
- * The third is the one that catches a quiet change of semantics: S >= L
- * is the malleability check every serious verifier makes and RFC 8032
- * requires, and the vector is case 6 of the ed25519-speccheck suite --
- * the same suite tests/unit/ed25519_test.c runs in full on every platform.
- * Returns NULL on success, or the name of the check that failed. */
+/* The known-answer test, over the vectors in ed25519_kat.h: the RFC 8032
+ * vector must verify, a corrupted copy must not, and a signature with S
+ * outside the group order must not. Returns NULL on success, or the name
+ * of the check that failed. */
 static const char *ed25519_selftest(void)
 {
-    /* RFC 8032 §7.1 TEST 3. */
-    static const uint8_t pk[32] = {
-        0xfc, 0x51, 0xcd, 0x8e, 0x62, 0x18, 0xa1, 0xa3, 0x8d, 0xa4, 0x7e,
-        0xd0, 0x02, 0x30, 0xf0, 0x58, 0x08, 0x16, 0xed, 0x13, 0xba, 0x33,
-        0x03, 0xac, 0x5d, 0xeb, 0x91, 0x15, 0x48, 0x90, 0x80, 0x25};
-    static const uint8_t msg[2] = {0xaf, 0x82};
-    static const uint8_t sig[64] = {
-        0x62, 0x91, 0xd6, 0x57, 0xde, 0xec, 0x24, 0x02, 0x48, 0x27, 0xe6,
-        0x9c, 0x3a, 0xbe, 0x01, 0xa3, 0x0c, 0xe5, 0x48, 0xa2, 0x84, 0x74,
-        0x3a, 0x44, 0x5e, 0x36, 0x80, 0xd7, 0xdb, 0x5a, 0xc3, 0xac, 0x18,
-        0xff, 0x9b, 0x53, 0x8d, 0x16, 0xf2, 0x90, 0xae, 0x67, 0xf7, 0x60,
-        0x98, 0x4d, 0xc6, 0x59, 0x4a, 0x7c, 0x15, 0xe9, 0x71, 0x6e, 0xd2,
-        0x8d, 0xc0, 0x27, 0xbe, 0xce, 0xea, 0x1e, 0xc4, 0x0a};
-    /* ed25519-speccheck case 6: S >= L. */
-    static const uint8_t big_s_pk[32] = {
-        0x44, 0x2a, 0xad, 0x9f, 0x08, 0x9a, 0xd9, 0xe1, 0x46, 0x47, 0xb1,
-        0xef, 0x90, 0x99, 0xa1, 0xff, 0x47, 0x98, 0xd7, 0x85, 0x89, 0xe6,
-        0x6f, 0x28, 0xec, 0xa6, 0x9c, 0x11, 0xf5, 0x82, 0xa6, 0x23};
-    static const uint8_t big_s_msg[32] = {
-        0x85, 0xe2, 0x41, 0xa0, 0x7d, 0x14, 0x8b, 0x41, 0xe4, 0x7d, 0x62,
-        0xc6, 0x3f, 0x83, 0x0d, 0xc7, 0xa6, 0x85, 0x1a, 0x0b, 0x1f, 0x33,
-        0xae, 0x4b, 0xb2, 0xf5, 0x07, 0xfb, 0x6c, 0xff, 0xec, 0x40};
-    static const uint8_t big_s_sig[64] = {
-        0xe9, 0x6f, 0x66, 0xbe, 0x97, 0x6d, 0x82, 0xe6, 0x01, 0x50, 0xba,
-        0xec, 0xff, 0x99, 0x06, 0x68, 0x4a, 0xeb, 0xb1, 0xef, 0x18, 0x1f,
-        0x67, 0xa7, 0x18, 0x9a, 0xc7, 0x8e, 0xa2, 0x3b, 0x6c, 0x0e, 0x54,
-        0x7f, 0x76, 0x90, 0xa0, 0xe2, 0xdd, 0xcd, 0x04, 0xd8, 0x7d, 0xbc,
-        0x34, 0x90, 0xdc, 0x19, 0xb3, 0xb3, 0x05, 0x2f, 0x7f, 0xf0, 0x53,
-        0x8c, 0xb6, 0x8a, 0xfb, 0x36, 0x9b, 0xa3, 0xa5, 0x14};
+    const ssoossh_ed25519_vector *kat = &SSOOSSH_ED25519_KAT;
     uint8_t flipped[64];
 
-    if (ed25519_verify_raw(pk, msg, sizeof(msg), sig) != SSOOSSH_VERIFY_OK) {
+    if (ed25519_verify_raw(kat->pk, kat->msg, kat->msg_len, kat->sig) !=
+        SSOOSSH_VERIFY_OK) {
         return "RFC 8032 vector did not verify";
     }
-    memcpy(flipped, sig, sizeof(flipped));
-    flipped[10] ^= 0x01;
-    if (ed25519_verify_raw(pk, msg, sizeof(msg), flipped) !=
+    memcpy(flipped, kat->sig, sizeof(flipped));
+    flipped[SSOOSSH_ED25519_KAT_FLIP_BYTE] ^= 0x01;
+    if (ed25519_verify_raw(kat->pk, kat->msg, kat->msg_len, flipped) !=
         SSOOSSH_VERIFY_BAD) {
         return "corrupted signature was not refused";
     }
-    if (ed25519_verify_raw(big_s_pk, big_s_msg, sizeof(big_s_msg), big_s_sig) !=
-        SSOOSSH_VERIFY_BAD) {
+    if (ed25519_verify_raw(SSOOSSH_ED25519_BIG_S.pk, SSOOSSH_ED25519_BIG_S.msg,
+                           SSOOSSH_ED25519_BIG_S.msg_len,
+                           SSOOSSH_ED25519_BIG_S.sig) != SSOOSSH_VERIFY_BAD) {
         return "signature with S >= L was not refused";
     }
     return NULL;
@@ -267,42 +226,39 @@ static void ed25519_init(void)
     const void *key_type = NULL, *algorithm = NULL;
     const char *failed;
 
-    if (!resolve_constant(ED25519_KEY_TYPE_SYM, &key_type)) {
+    if (!resolve_constant(ED25519_KEY_TYPE_SYM, &key_type) ||
+        !resolve_constant(ED25519_ALGORITHM_SYM, &algorithm)) {
         ssoossh_warnf("Ed25519: Security.framework on this macOS does not "
                       "export %s; ssh-ed25519 CAs cannot be used here",
-                      ED25519_KEY_TYPE_SYM);
+                      key_type == NULL ? ED25519_KEY_TYPE_SYM
+                                       : ED25519_ALGORITHM_SYM);
         return;
     }
-    if (!resolve_constant(ED25519_ALGORITHM_SYM, &algorithm)) {
-        ssoossh_warnf("Ed25519: Security.framework on this macOS does not "
-                      "export %s; ssh-ed25519 CAs cannot be used here",
-                      ED25519_ALGORITHM_SYM);
-        return;
-    }
-    ed25519.key_type = key_type;
-    ed25519.algorithm = algorithm;
+    ed25519_key_type = key_type;
+    ed25519_algorithm = algorithm;
 
     failed = ed25519_selftest();
     if (failed != NULL) {
         /* Same names, different behaviour. Not trusted: the constants are
          * cleared so nothing below can reach them by accident. */
-        ed25519.key_type = NULL;
-        ed25519.algorithm = NULL;
-        ed25519.state = ED25519_SELFTEST_FAILED;
+        ed25519_key_type = NULL;
+        ed25519_algorithm = NULL;
+        ed25519_version = "Security.framework (Ed25519 SPI FAILED self-test)";
         ssoossh_errf("Ed25519: Security.framework SPI failed its self-test "
                      "(%s); refusing to use it, ssh-ed25519 CAs cannot be "
                      "used here",
                      failed);
         return;
     }
-    ed25519.state = ED25519_USABLE;
+    ed25519_ok = true;
+    ed25519_version = "Security.framework (Ed25519 SPI ok)";
     ssoossh_debugf("Ed25519: Security.framework SPI resolved and self-tested");
 }
 
 static bool ed25519_usable(void)
 {
     (void)pthread_once(&ed25519_once, ed25519_init);
-    return ed25519.state == ED25519_USABLE;
+    return ed25519_ok;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -557,7 +513,7 @@ static bool sig_algo_info(const char *sig_algo, const char **key_type,
             return false;
         }
         *key_type = "ssh-ed25519";
-        *algorithm = ed25519.algorithm;
+        *algorithm = ed25519_algorithm;
         return true;
     }
     if (strcmp(sig_algo, "rsa-sha2-256") == 0) {
@@ -609,13 +565,11 @@ ssoossh_verify_result ssoossh_crypto_verify(const char *sig_algo,
     key = key_from_ssh_blob(ca_key, ca_key_len, key_type, sizeof(key_type),
                             scratch, sizeof(scratch));
     if (key == NULL) {
-        /* Distinguish "this backend cannot" from "that is not a key", so
-         * the operator is told which. An Ed25519 blob that parsed but
-         * found no usable SPI lands here; one that did not parse is an
-         * error like any other malformed key. */
-        if (strcmp(key_type, "ssh-ed25519") == 0 && !ed25519_usable()) {
-            return SSOOSSH_VERIFY_UNSUPPORTED;
-        }
+        /* A blob that did not parse, or -- for an Ed25519 CA under a
+         * signature of another type -- one this host could not build a
+         * key for. Either way the certificate is malformed for the
+         * signature it claims; "this backend cannot" was answered by
+         * sig_algo_info and by the CA loader before this point. */
         return SSOOSSH_VERIFY_ERROR;
     }
     if (strcmp(key_type, want_key_type) != 0) {
@@ -679,29 +633,22 @@ void ssoossh_crypto_wipe(void *p, size_t n)
 #endif
 }
 
-const char *ssoossh_crypto_fips_state(void)
+ssoossh_fips_state ssoossh_crypto_fips_state(void)
 {
     /* macOS has no FIPS switch: Apple's corecrypto modules are validated
-     * as shipped and there is no other configuration to be in. Nothing to
-     * report, so the version line carries no field. */
-    return NULL;
+     * as shipped and there is no other configuration to be in. */
+    return SSOOSSH_FIPS_UNSWITCHED;
 }
 
 const char *ssoossh_crypto_version(void)
 {
     /* Security.framework and CommonCrypto ship with the OS and carry no
      * independently queryable version, so the backend is named instead,
-     * together with what became of the Ed25519 SPI on this host. That is
-     * the line every authentication logs, so "which Macs lost Ed25519
-     * after the update" is a grep of syslog rather than a question. */
+     * together with what became of the Ed25519 SPI on this host. The
+     * probe is forced here on purpose, even for a fleet with no Ed25519
+     * CA: this line is the drift signal, and "which Macs lost Ed25519
+     * after the update" has to be a grep of syslog before an Ed25519 CA
+     * appears, not after. It is three verifies, once per process. */
     (void)ed25519_usable();
-    switch (ed25519.state) {
-    case ED25519_USABLE:
-        return "Security.framework (Ed25519 SPI ok)";
-    case ED25519_SELFTEST_FAILED:
-        return "Security.framework (Ed25519 SPI FAILED self-test)";
-    case ED25519_ABSENT:
-    default:
-        return "Security.framework (no Ed25519 SPI)";
-    }
+    return ed25519_version;
 }

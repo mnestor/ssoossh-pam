@@ -160,7 +160,7 @@ ifneq ($(OPENSSL_PREFIX),)
   LDFLAGS += -Wl,-rpath,$(OPENSSL_PREFIX)/lib
 endif
 
-.PHONY: all clean check-symbols check-stdio check-size test san install \
+.PHONY: all clean check-symbols check-stdio check-size test san install unsanitised \
         help cross lint plan-serve ci-local ci-list fuzz fuzz-run e2e \
         differential
 
@@ -282,19 +282,20 @@ check-apple-spi:
 	fi; \
 	tests/apple-spi-check.sh
 
-# The whole flow against tests/stubd.py, through a real PAM stack. Needs
-# root to install the module and write /etc/pam.d -- see tests/README.md.
-#
-# The sanitiser check is not paranoia. `make san` leaves an instrumented
-# module behind and removes the test binaries; the next `make e2e` then
-# builds an uninstrumented pamtest, dlopens an instrumented module into it,
-# and every scenario fails with "ASan runtime does not come first" -- which
-# looks like a module bug and is not one.
-e2e:
+# `make san` leaves an instrumented module behind and removes the test
+# binaries. Anything that then dlopens that module from an uninstrumented
+# harness fails with "ASan runtime does not come first", which looks like a
+# module bug and is not one, and anything that packages it ships a module
+# that needs libasan. Targets that must have a plain module depend on this.
+unsanitised:
 	@if nm $(MODULE) 2>/dev/null | grep -q asan; then \
-	  echo "e2e: the built module is sanitised; rebuilding it plain"; \
+	  echo "the built module is sanitised; rebuilding it plain"; \
 	  $(MAKE) --no-print-directory clean; \
 	fi
+
+# The whole flow against tests/stubd.py, through a real PAM stack. Needs
+# root to install the module and write /etc/pam.d -- see tests/README.md.
+e2e: unsanitised
 	@$(MAKE) --no-print-directory $(MODULE) tests/pamtest
 	@tests/e2e.sh $(SCENARIOS)
 
@@ -378,10 +379,7 @@ lint:
 	  command -v $$t >/dev/null || { echo "lint: $$t not installed, skipping"; continue; }; \
 	  case $$t in \
 	    actionlint)    actionlint || rc=1 ;; \
-	    groff)         for m in docs/*.[58]; do \
-	                     out=$$(groff -man -Tutf8 -z -ww "$$m" 2>&1); \
-	                     [ -z "$$out" ] || { echo "$$m:"; echo "$$out"; rc=1; }; \
-	                   done ;; \
+	    groff)         groff -man -Tutf8 -z -ww docs/*.[58] || rc=1 ;; \
 	    shellcheck)    shellcheck tests/*.sh packaging/*.sh || rc=1 ;; \
 	    clang-format)  clang-format --dry-run --Werror src/*.c src/*.h tests/*.c || rc=1 ;; \
 	    cppcheck)      cppcheck --quiet --error-exitcode=1 \
@@ -452,11 +450,7 @@ DIST        := dist
 DIST_TARGET ?= $(shell tests/dist-target.sh)
 DIST_NAME   := pam_ssoossh-$(VERSION)-$(DIST_TARGET)
 
-dist:
-	@if nm $(MODULE) 2>/dev/null | grep -q asan; then \
-	  echo "dist: the built module is sanitised; rebuilding it plain"; \
-	  $(MAKE) --no-print-directory clean; \
-	fi
+dist: unsanitised
 	@$(MAKE) --no-print-directory $(MODULE)
 	@set -e; \
 	stage=$(BUILD)/$(DIST_NAME); \

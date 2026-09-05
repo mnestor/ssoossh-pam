@@ -14,18 +14,16 @@ name: Apple drift
 # something to know about a beta cycle early, not a point release late.
 # docs/porting.md has the full story.
 #
-# Three views, each a job:
+# Two jobs. `hosted` runs on every macOS image GitHub offers -- the two
+# newest and the preview -- and does both views in one VM: every Xcode
+# SDK on the image, betas included, so the SDK for the *next* macOS is
+# checked while it is still a beta; then the module built and its Ed25519
+# suite run through the framework of the macOS the image runs. `source`
+# reads Apple's open-source drop of Security.framework for the
+# declarations and the export list; it lags releases, but it is the one
+# view that says *why* something changed.
 #
-#   sdk       every Xcode on the runner image, so the SDK for the *next*
-#             macOS is checked while it is still a beta. Runs on the newest
-#             images GitHub offers, which is where the beta Xcodes are.
-#   runtime   the module built and its Ed25519 suite run through the
-#             framework of the macOS the job is on.
-#   source    Apple's open-source drop of Security.framework, checked for
-#             the declarations and the export list. Lags releases, but it
-#             is the one view that says *why* something changed.
-#
-# A fourth, for an Apple developer account: a self-hosted Mac enrolled in
+# A third, for an Apple developer account: a self-hosted Mac enrolled in
 # the developer beta programme runs the runtime check against the beta OS
 # itself, which no hosted image does. Gated on a repository variable so a
 # repo without such a Mac does not queue forever -- see docs/porting.md,
@@ -44,8 +42,8 @@ permissions:
   contents: read
 
 jobs:
-  sdk:
-    name: sdk (${{ matrix.runner }})
+  hosted:
+    name: hosted (${{ matrix.runner }})
     strategy:
       fail-fast: false
       matrix:
@@ -55,42 +53,19 @@ jobs:
         # https://github.com/actions/runner-images#available-images
         runner: [macos-15, macos-26, xcode-27]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
-      - name: Every Xcode SDK on this image, betas included
-        run: |
-          sw_vers
-          rc=0
-          for app in /Applications/Xcode*.app; do
-            [ -d "$app" ] || continue
-            echo "=================================================="
-            echo "$app"
-            if ! sdk=$(DEVELOPER_DIR="$app" xcrun --show-sdk-path 2>/dev/null); then
-              echo "  no macOS SDK reachable through this Xcode; skipping"
-              continue
-            fi
-            tests/apple-spi-check.sh --sdk "$sdk" || rc=$?
-          done
-          exit $rc
+      - name: What this image is
+        run: sw_vers
 
-  runtime:
-    name: runtime (${{ matrix.runner }})
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [macos-15, macos-26, xcode-27]
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
+      # The module and the unit binary the runtime half of the check runs.
       - name: Build
-        run: make
+        run: make tests/unit_tests
 
-      - name: Ed25519 through the framework this macOS runs
-        run: make check-apple-spi
+      - name: Every Xcode SDK on this image, then the framework it runs
+        run: tests/apple-spi-check.sh --all-xcodes
 
   # Apple's source drop, so a change has a diff to read. The newest tag of
   # the Security project is found from the distribution manifest, which
@@ -152,23 +127,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: What this Mac is running
-        run: |
-          sw_vers
-          xcodebuild -version 2>/dev/null || xcrun --show-sdk-version
-
-      - name: Every Xcode SDK on this Mac
-        run: |
-          rc=0
-          for app in /Applications/Xcode*.app; do
-            [ -d "$app" ] || continue
-            sdk=$(DEVELOPER_DIR="$app" xcrun --show-sdk-path 2>/dev/null) || continue
-            echo "== $app"
-            tests/apple-spi-check.sh --sdk "$sdk" || rc=$?
-          done
-          exit $rc
+        run: sw_vers
 
       - name: Build
-        run: make
+        run: make tests/unit_tests
 
-      - name: Ed25519 through the beta framework
-        run: make check-apple-spi
+      - name: Every Xcode SDK on this Mac, then the beta framework
+        run: tests/apple-spi-check.sh --all-xcodes

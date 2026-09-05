@@ -81,23 +81,17 @@ int suite_crypto(void)
      * the algorithm -- on macOS, the Security.framework SPI being absent
      * or failing its self-test -- is a failure here, with the version line
      * saying which. */
-    {
-        const char *fips = ssoossh_crypto_fips_state();
-        bool fips_on = fips != NULL && strcmp(fips, "on") == 0;
-
-        if (!ssoossh_crypto_supports_key("ssh-ed25519")) {
-            T_CHECKF(fips_on,
-                     "no ssh-ed25519 support and FIPS mode is not on "
-                     "(crypto: %s, fips: %s)",
-                     ssoossh_crypto_version(), fips != NULL ? fips : "n/a");
-            if (fips_on) {
-                printf("  note: ssh-ed25519 unavailable under FIPS mode "
-                       "(crypto: %s)\n",
-                       ssoossh_crypto_version());
-            }
+    if (!ssoossh_crypto_supports_key("ssh-ed25519")) {
+        if (ssoossh_crypto_fips_state() == SSOOSSH_FIPS_ON) {
+            printf("  note: ssh-ed25519 unavailable under FIPS mode "
+                   "(crypto: %s)\n",
+                   ssoossh_crypto_version());
+        } else {
+            t_failf(__FILE__, __LINE__,
+                    "no ssh-ed25519 support and FIPS mode is not on "
+                    "(crypto: %s)",
+                    ssoossh_crypto_version());
         }
-        T_CHECK(fips == NULL || strcmp(fips, "on") == 0 ||
-                strcmp(fips, "off") == 0);
     }
 
     T_CHECK(ssoossh_crypto_version() != NULL);

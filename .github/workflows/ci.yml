@@ -15,6 +15,17 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Build dependencies, once per image family. A matrix row names its family
+# and the install step looks the command up here.
+env:
+  INSTALL_debian: apt-get update && apt-get install -y --no-install-recommends
+    build-essential pkg-config libssl-dev libcurl4-openssl-dev libpam0g-dev
+    libpam-runtime libpam-modules git openssh-client python3
+  INSTALL_alpine: apk add --no-cache build-base pkgconf openssl-dev curl-dev
+    linux-pam-dev linux-pam git compiler-rt openssh-keygen python3 bash
+  INSTALL_el: dnf install -y gcc make pkgconf-pkg-config openssl-devel
+    libcurl-devel pam pam-devel git libasan libubsan openssh-clients python3
+
 jobs:
   # Three Linux images rather than a libc pair, because the third one is not
   # about libc at all: el8 is the only build that compiles the OpenSSL 1.1.1
@@ -36,25 +47,16 @@ jobs:
         include:
           - name: debian12          # OpenSSL 3.0, curl 7.88, gcc 14
             container: debian:12
-            install: apt-get update && apt-get install -y --no-install-recommends
-              build-essential pkg-config libssl-dev libcurl4-openssl-dev
-              libpam0g-dev libpam-runtime libpam-modules git openssh-client
-              python3
+            family: debian
           - name: alpine            # musl, OpenSSL 3.5, gcc 15
             container: alpine:3
-            install: apk add --no-cache build-base pkgconf openssl-dev curl-dev
-              linux-pam-dev linux-pam git compiler-rt openssh-keygen python3
-              bash
+            family: alpine
           - name: el8               # OpenSSL 1.1.1k, curl 7.61.1, gcc 8.5 -- the floor
             container: almalinux:8
-            install: dnf install -y gcc make pkgconf-pkg-config openssl-devel
-              libcurl-devel pam pam-devel git libasan libubsan openssh-clients
-              python3
+            family: el
           - name: el9               # OpenSSL 3.x with a FIPS provider, gcc 11
             container: almalinux:9
-            install: dnf install -y gcc make pkgconf-pkg-config openssl-devel
-              libcurl-devel pam pam-devel git libasan libubsan openssh-clients
-              python3
+            family: el
           # The same two, with OpenSSL forced into FIPS mode the way Red
           # Hat's build allows without a fips=1 kernel. el8's FIPS module
           # has no EdDSA, so this is where the Ed25519 probe must say no and
@@ -62,19 +64,15 @@ jobs:
           # there everything must still work.
           - name: el8-fips
             container: almalinux:8
+            family: el
             fips: 1
-            install: dnf install -y gcc make pkgconf-pkg-config openssl-devel
-              libcurl-devel pam pam-devel git libasan libubsan openssh-clients
-              python3
           - name: el9-fips
             container: almalinux:9
+            family: el
             fips: 1
-            install: dnf install -y gcc make pkgconf-pkg-config openssl-devel
-              libcurl-devel pam pam-devel git libasan libubsan openssh-clients
-              python3
     steps:
       - name: Install build dependencies
-        run: ${{ matrix.install }}
+        run: ${{ env[format('INSTALL_{0}', matrix.family)] }}
 
       # Set only for the FIPS rows: Red Hat's OpenSSL honours the variable
       # by presence, so an empty value would force FIPS on every row.

@@ -336,20 +336,20 @@ host sees it:
 | --- | --- | --- |
 | the symbols leave the export list | the next SDK, in a beta Xcode | `tests/apple-spi-check.sh --sdk` over every Xcode on a runner |
 | the symbols stay but behave differently | the next macOS, in a beta OS | the backend's self-test and the `ed25519` suite, on that OS |
-| the SPI becomes public API | the next SDK's headers | the same script, which exits 2 with a note to switch to the header |
+| the SPI becomes public API | the next SDK's headers | the same script, which fails with a note to switch to the header |
 
 **On every macOS CI run**, `cross-platform.yml` checks the SDK before
 building and runs `make check-apple-spi` after the unit suite.
 
 **Weekly**, [`apple-drift.yml`](../.github/workflows/apple-drift.yml)
-runs three jobs on a schedule and on demand:
+runs on a schedule and on demand:
 
-- `sdk` — on the two newest hosted macOS images and GitHub's preview
-  image, every `/Applications/Xcode*.app` is checked, which is where the
-  beta SDKs are. GitHub installs Xcode betas on its images before the
-  matching macOS ships, so this is usually the first view of a change.
-- `runtime` — the module built and its Ed25519 suite run through the
-  framework of the macOS each image runs.
+- `hosted` — on the two newest hosted macOS images and GitHub's preview
+  image: every `/Applications/Xcode*.app` is checked, which is where the
+  beta SDKs are (GitHub installs Xcode betas on its images before the
+  matching macOS ships, so this is usually the first view of a change),
+  then the module is built and its Ed25519 suite run through the framework
+  of the macOS the image runs.
 - `source` — the newest tag of Apple's open-source Security project,
   checked for the declarations, the availability annotations and the
   export list. This lags releases but is the one view with a diff to

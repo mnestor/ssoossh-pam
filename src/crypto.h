@@ -87,13 +87,19 @@ void ssoossh_crypto_wipe(void *p, size_t n);
  * "did this host's Security.framework still have Ed25519". */
 const char *ssoossh_crypto_version(void);
 
-/* Whether the host's crypto is running in FIPS mode: "on", "off", or NULL
- * on a platform that has no such switch (macOS, whose corecrypto is
- * validated as shipped). Logged beside the version. The module makes no
- * algorithm decisions of its own from this -- the per-attempt key is
- * always P-384, and which CA algorithms verify is whatever the host's
- * crypto allows in its current configuration, found out by asking it
- * rather than by table. */
-const char *ssoossh_crypto_fips_state(void);
+/* Whether the host's crypto is running in FIPS mode. Logged beside the
+ * version. The module makes no algorithm decisions of its own from this
+ * -- the per-attempt key is always P-384, and which CA algorithms verify
+ * is whatever the host's crypto allows in its current configuration,
+ * found out by asking it rather than by table. */
+typedef enum {
+    /* The platform has no such switch: macOS, whose corecrypto is
+     * validated as shipped. Nothing to log. */
+    SSOOSSH_FIPS_UNSWITCHED,
+    SSOOSSH_FIPS_OFF,
+    SSOOSSH_FIPS_ON,
+} ssoossh_fips_state;
+
+ssoossh_fips_state ssoossh_crypto_fips_state(void);
 
 #endif /* PAM_SSOOSSH_CRYPTO_H */
