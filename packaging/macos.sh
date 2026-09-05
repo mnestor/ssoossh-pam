@@ -68,6 +68,9 @@ field() {
 }
 describe=$(field version)
 target=$(field target)
+# Optional, like it is in package.sh: a tarball built before the field
+# existed still packages, it just cannot name a server release.
+compat=$(field ssoosshd)
 if [ -z "$describe" ] || [ -z "$target" ]; then
     echo "macos: $tarball has no usable BUILDINFO" >&2
     exit 1
@@ -191,6 +194,7 @@ cp "$stage/LICENSE" "$res/LICENSE.txt"
 fill() {
     sed -e "s|@VERSION@|$describe|g" -e "s|@PKGVER@|$pkgver|g" \
         -e "s|@TARGET@|$target|g" -e "s|@MINVER@|$minver|g" \
+        -e "s|@COMPAT@|${compat:-unknown}|g" \
         -e "s|@IDENTIFIER@|$PKG_IDENTIFIER|g" "$1" > "$2"
 }
 fill "$here/macos/welcome.html" "$res/welcome.html"

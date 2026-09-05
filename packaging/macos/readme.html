@@ -36,6 +36,14 @@ open while you test. <code>man pam_ssoossh</code> describes every option;
 <code>/usr/local/share/doc/pam_ssoossh/examples/pam.d/sudo_local</code> is
 this stanza with its reasoning.</p>
 
+<p><b>The server it was tested against</b></p>
+
+<p>This build was qualified against <code>ssoosshd</code> @COMPAT@. The
+module and the server are released separately, so the version above need
+not match your server's. The module names the release it was tested
+against in the line it logs on every authentication, and
+<code>/usr/local/share/doc/pam_ssoossh/BUILDINFO</code> records it too.</p>
+
 <p><b>Removing it</b></p>
 
 <p>Delete the <code>pam.d</code> line first, then the files listed above, and
