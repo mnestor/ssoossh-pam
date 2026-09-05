@@ -44,7 +44,8 @@ concurrency:
   cancel-in-progress: false
 
 # Build dependencies, once per image family. A matrix row names its family
-# and the install step looks the command up here.
+# and the install step looks the command up here; the musl job, which
+# starts its own container, passes INSTALL_alpine into it.
 env:
   INSTALL_el: dnf install -y gcc make pkgconf-pkg-config openssl-devel
     libcurl-devel pam pam-devel git binutils openssh-clients python3
@@ -78,14 +79,6 @@ jobs:
             runner: ubuntu-24.04-arm
             container: almalinux:8
             family: el
-          - target: linux-x86_64-musl
-            runner: ubuntu-latest
-            container: alpine:3
-            family: alpine
-          - target: linux-aarch64-musl
-            runner: ubuntu-24.04-arm
-            container: alpine:3
-            family: alpine
     steps:
       - name: Install build dependencies
         run: ${{ env[format('INSTALL_{0}', matrix.family)] }}
@@ -135,6 +128,61 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Alpine, in a container this job starts itself rather than one the
+  # runner starts for it. The runner runs every JavaScript action *inside*
+  # the job container, which on musl needs the node build it ships only
+  # for x64: an `alpine:3` `container:` on an arm64 runner fails at the
+  # first action with "JavaScript Actions in Alpine containers are only
+  # supported on x64 Linux runners". Checking out and uploading on the
+  # host and running only the build under `docker run` keeps both musl
+  # rows on the one path, rather than the x86_64 one on `container:` and
+  # the aarch64 one on something else.
+  musl:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64-musl
+            runner: ubuntu-latest
+          - target: linux-aarch64-musl
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The steps of the job above, in one container because each
+      # `docker run` would otherwise start a fresh one. Root inside, as in
+      # a `container:` job, which is what `make e2e` wants; the workspace
+      # is the mount, so dist/ lands on the host for the upload below.
+      - name: Build, gate and package
+        run: |
+          docker run --rm -i \
+            -v "$GITHUB_WORKSPACE:/src" -w /src \
+            -e INSTALL_alpine -e TARGET="${{ matrix.target }}" \
+            alpine:3 sh -eux <<'EOF'
+          $INSTALL_alpine
+          git config --global --add safe.directory /src
+          got=$(tests/dist-target.sh)
+          echo "image reports: $got"
+          test "$got" = "$TARGET"
+          make
+          make test
+          make check-stdio
+          make check-size
+          make e2e
+          make dist DIST_TARGET="$TARGET"
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
   # No hosted FreeBSD image exists; a VM on the Linux runner, as in
   # cross-platform.yml. Slower, but it is the OpenPAM platform that ships.
   freebsd:
@@ -165,6 +213,11 @@ jobs:
             gmake check-stdio
             gmake check-size
             gmake tests/pamtest
+            # This image boots with kern.hostname empty, so gethostname(3)
+            # succeeds and returns nothing, the module sends no "hostname"
+            # claim and context_check.py fails the body. Name it, as
+            # cross-platform.yml does.
+            sudo hostname freebsd-ci
             sudo gmake e2e
             gmake dist DIST_TARGET=freebsd14-x86_64
 
@@ -284,7 +337,7 @@ jobs:
   # Everything into one place, checksummed, attested, published.
   release:
     name: release
-    needs: [linux, freebsd, macos]
+    needs: [linux, musl, freebsd, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write # gh release create
