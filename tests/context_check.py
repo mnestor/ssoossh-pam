@@ -10,7 +10,6 @@ about the host it is running on -- the service name it wrote into pam.d,
 the CA it generated -- not for truth in any deeper sense.
 """
 import json
-import os
 import platform
 import re
 import subprocess
@@ -60,8 +59,12 @@ need("client_time",
      "RFC 3339 UTC")
 
 # The fingerprint must be the CA this run generated, in ssh-keygen's form.
-want_fp = subprocess.run(["ssh-keygen", "-lf", ca_pub], capture_output=True,
-                         text=True, check=True).stdout.split()[1]
+# capture_output and text= are 3.7; the oldest image this suite runs on
+# ships Python 3.6, where stdout=PIPE with universal_newlines says the
+# same thing and still does on every version since.
+want_fp = subprocess.run(["ssh-keygen", "-lf", ca_pub],
+                         stdout=subprocess.PIPE, universal_newlines=True,
+                         check=True).stdout.split()[1]
 need("trusted_ca_fingerprints",
      lambda v: v == [want_fp], f"exactly [{want_fp}]")
 
@@ -72,7 +75,20 @@ if system in ("Linux", "FreeBSD"):
 elif "process" in body:
     problems.append(f"process: must be absent on {system}, got {body['process']!r}")
 
-if system != "Linux" or os.path.exists("/etc/machine-id"):
+# The module reads /etc/machine-id and omits the field when there is
+# nothing in it, which is a container's normal state: systemd writes the
+# file on a real boot, and the images CI runs in either ship no file at
+# all or ship an empty one. The file existing is therefore not enough to
+# demand the field; it has to have something in it.
+def has_machine_id():
+    try:
+        with open("/etc/machine-id", encoding="utf-8") as f:
+            return f.readline().strip() != ""
+    except OSError:
+        return False
+
+
+if system != "Linux" or has_machine_id():
     need("machine_id", is_str, "non-empty string")
 
 # omitempty: a string that is empty is omitted, never sent as "".
