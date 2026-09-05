@@ -65,7 +65,15 @@ here=$(cd "$(dirname "$0")" && pwd)
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/pam_ssoossh-macos.XXXXXX")
 keychain=
+searchlist=
+defaultkc=
 cleanup() {
+    # The runner's own keychain configuration goes back before the keychain
+    # that displaced it is deleted, in the order it was changed.
+    # shellcheck disable=SC2086 # one keychain path per line, none with spaces
+    [ -z "$defaultkc" ] || security default-keychain -d user -s "$defaultkc" 2>/dev/null || true
+    # shellcheck disable=SC2086 # as above
+    [ -z "$searchlist" ] || security list-keychains -d user -s $searchlist >/dev/null 2>&1 || true
     [ -z "$keychain" ] || security delete-keychain "$keychain" 2>/dev/null || true
     rm -rf "$work"
 }
@@ -230,6 +238,19 @@ if [ -n "${QUILL_SIGN_P12:-}" ]; then
     security create-keychain -p "$kcpass" "$keychain"
     security set-keychain-settings "$keychain"
     security unlock-keychain -p "$kcpass" "$keychain"
+    # codesign resolves an identity by name through the search list and the
+    # default keychain, not through the --keychain it is handed, so a
+    # keychain that exists only as a path signs nothing: it fails with "The
+    # specified item could not be found in the keychain" over an identity
+    # that find-identity, pointed straight at that keychain, has just
+    # listed. Put it in front of both. The trap puts them back.
+    searchlist=$(security list-keychains -d user | sed 's/^[[:space:]]*"//;s/"$//')
+    defaultkc=$(security default-keychain -d user 2>/dev/null |
+        sed 's/^[[:space:]]*"//;s/"$//') || defaultkc=
+    # shellcheck disable=SC2086 # one keychain path per line, none with spaces
+    security list-keychains -d user -s "$keychain" $searchlist >/dev/null
+    security default-keychain -d user -s "$keychain" >/dev/null
+
     materialise "$QUILL_SIGN_P12" "$work/sign.p12"
     import_p12 QUILL_SIGN_P12 "$work/sign.p12"
     if [ -n "${QUILL_INSTALLER_P12:-}" ]; then
