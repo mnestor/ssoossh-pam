@@ -33,7 +33,7 @@ name: Release
 # A tag with a hyphen (v1.2.0-rc1) is published as a pre-release.
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -148,7 +148,7 @@ jobs:
       - uses: cross-platform-actions/action@v0.27.0
         with:
           operating_system: freebsd
-          version: '14.2'
+          version: "14.2"
           run: |
             set -ex
             sudo pkg install -y gmake pkgconf curl bash python3
@@ -253,7 +253,7 @@ jobs:
           # and uncomment this line and the one in the step below. A
           # reference to a field that does not exist fails the step, which
           # is why it is not simply always on.
-          # QUILL_INSTALLER_P12: op://Github Actions/oqwo32gbo3ktrgutdcvzsr6msy/QUILL_INSTALLER_P12
+          QUILL_INSTALLER_P12: op://Github Actions/oqwo32gbo3ktrgutdcvzsr6msy/QUILL_INSTALLER_P12
 
       - name: Installer package, signed and notarized
         env:
@@ -262,7 +262,7 @@ jobs:
           QUILL_NOTARY_ISSUER: ${{ steps.secrets.outputs.QUILL_NOTARY_ISSUER }}
           QUILL_NOTARY_KEY_ID: ${{ steps.secrets.outputs.QUILL_NOTARY_KEY_ID }}
           QUILL_NOTARY_KEY: ${{ steps.secrets.outputs.QUILL_NOTARY_KEY }}
-          # QUILL_INSTALLER_P12: ${{ steps.secrets.outputs.QUILL_INSTALLER_P12 }}
+          QUILL_INSTALLER_P12: ${{ steps.secrets.outputs.QUILL_INSTALLER_P12 }}
         run: |
           packaging/package.sh dist/*.tar.gz dist
           ls -l dist
@@ -282,8 +282,8 @@ jobs:
     needs: [linux, freebsd, macos]
     runs-on: ubuntu-latest
     permissions:
-      contents: write      # gh release create
-      id-token: write      # provenance attestation
+      contents: write # gh release create
+      id-token: write # provenance attestation
       attestations: write
     steps:
       - uses: actions/checkout@v4
@@ -328,7 +328,7 @@ jobs:
       - name: Signing keys
         env:
           GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
-          APK_PRIVATE_KEY: ${{ secrets.RELEASE_APK_PRIVATE_KEY }}
+          APK_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
         run: |
           keys=$(mktemp -d)
           chmod 700 "$keys"

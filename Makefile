@@ -95,6 +95,12 @@ ifeq ($(SAN),1)
   SANLDFLAGS := -fsanitize=address,undefined
   CFLAGS     += $(SANCFLAGS)
   LDFLAGS    += $(SANLDFLAGS)
+else
+  # Fortify only outside the sanitiser build. ASan checks the same accesses
+  # more thoroughly, and clang predefines _FORTIFY_SOURCE 0 under
+  # -fsanitize=address -- so defining it again is a -Wmacro-redefined error
+  # under -Werror before a single line of ours is compiled.
+  FORTIFY := -D_FORTIFY_SOURCE=2
 endif
 
 # Exactly one crypto backend is compiled. Both are always present in the
@@ -123,7 +129,7 @@ CFLAGS  += -std=c11 -O2 -fPIC \
            -Wall -Wextra -Wconversion -Wshadow -Wpointer-arith \
            -Wstrict-prototypes -Wmissing-prototypes -Werror \
            -fstack-protector-strong \
-           -D_FORTIFY_SOURCE=2 \
+           $(FORTIFY) \
            -DPAM_SSOOSSH_VERSION='"$(VERSION)"' \
            -DPAM_SSOOSSH_COMPAT='"$(SSOOSSHD_COMPAT)"'
 CPPFLAGS += -Isrc

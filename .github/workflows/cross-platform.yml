@@ -57,6 +57,12 @@ jobs:
           run: |
             set -x
 
+            # The image's package set is older than the repo, and pkg is
+            # content to install a curl built against a newer libssh2 than
+            # the one already on disk -- libcurl.so.4 then fails to resolve
+            # at dlopen time. Bring the image up to the repo first.
+            sudo pkg upgrade -y
+
             # libcurl is NOT in FreeBSD base -- base has fetch(1), not curl.
             # libpam and OpenSSL are. bash and python3 are for the e2e
             # harness; ssh-keygen is in base.
