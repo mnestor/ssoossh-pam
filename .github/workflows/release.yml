@@ -387,14 +387,20 @@ jobs:
       # release, unsigned, and the log says so.
       #
       #   RELEASE_GPG_PRIVATE_KEY   armored OpenPGP private key; signs the
-      #                             deb and rpm packages, SHA256SUMS, and
-      #                             the apk -- one release key, not two.
+      #                             deb and rpm packages and SHA256SUMS.
       #                             See packaging/README.md
       #   RELEASE_GPG_PASSPHRASE    its passphrase, if any
+      #   RELEASE_APK_PRIVATE_KEY   RSA private key in PEM, unencrypted;
+      #                             signs the apk. A second key, because it
+      #                             has to be: nfpm signs an apk with RSA
+      #                             and apk(8) verifies it against an RSA
+      #                             public key under /etc/apk/keys, so an
+      #                             OpenPGP key cannot serve here however
+      #                             convenient one release key would be.
       - name: Signing keys
         env:
           GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
-          APK_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
+          APK_PRIVATE_KEY: ${{ secrets.RELEASE_APK_PRIVATE_KEY }}
         run: |
           keys=$(mktemp -d)
           chmod 700 "$keys"
@@ -405,12 +411,22 @@ jobs:
           else
             echo "gpg: RELEASE_GPG_PRIVATE_KEY is not set; deb, rpm and SHA256SUMS will be unsigned"
           fi
-          if [ -n "$APK_PRIVATE_KEY" ]; then
-            printf '%s\n' "$APK_PRIVATE_KEY" > "$keys/apk.pem"
-            echo "PKG_APK_KEY_FILE=$keys/apk.pem" >> "$GITHUB_ENV"
-            echo "apk: signing with the release key"
+          # Checked before it is used, not after: nfpm fails the whole
+          # release on a key it cannot parse ("Signing error: no PEM block
+          # found"), which is a poor trade for one unsigned apk.
+          if [ -z "$APK_PRIVATE_KEY" ]; then
+            echo "apk: RELEASE_APK_PRIVATE_KEY is not set; the apk will be unsigned"
           else
-            echo "apk: RELEASE_GPG_PRIVATE_KEY is not set; the apk will be unsigned"
+            printf '%s\n' "$APK_PRIVATE_KEY" > "$keys/apk.pem"
+            if openssl rsa -in "$keys/apk.pem" -noout -passin pass: 2>/dev/null; then
+              echo "PKG_APK_KEY_FILE=$keys/apk.pem" >> "$GITHUB_ENV"
+              echo "apk: signing with the apk release key"
+            else
+              rm -f "$keys/apk.pem"
+              echo "apk: RELEASE_APK_PRIVATE_KEY is not an unencrypted RSA private key" \
+                "in PEM; the apk will be unsigned. An OpenPGP key will not do here" \
+                "-- see packaging/README.md"
+            fi
           fi
           echo "SIGNING_KEYS=$keys" >> "$GITHUB_ENV"
 

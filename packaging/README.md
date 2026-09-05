@@ -88,10 +88,20 @@ Linux packages:
   $ gpg --fingerprint release@example.org                  # -> README
   ```
 
-  `RELEASE_GPG_PRIVATE_KEY` is also what the workflow hands nfpm to sign
-  the apk. Alpine's `apk` verifies against a public key installed under
-  `/etc/apk/keys/<name>` rather than an OpenPGP keyring, so the public
-  half is published separately.
+  The apk needs a second key, and cannot share that one. nfpm signs an apk
+  with RSA, and Alpine's `apk` verifies it against an RSA public key
+  installed under `/etc/apk/keys/<name>` rather than against an OpenPGP
+  keyring — so an OpenPGP key is not merely inconvenient here, it is the
+  wrong kind of key, and nfpm rejects it with "Signing error: no PEM block
+  found". Generate an unencrypted RSA key for it:
+
+  ```console
+  $ openssl genrsa -out apk.pem 4096                       # -> RELEASE_APK_PRIVATE_KEY
+  $ openssl rsa -in apk.pem -pubout -out pam-ssoossh.rsa.pub
+  ```
+
+  The workflow derives the public half itself and attaches it to the
+  release; the command above is for checking it by hand.
 
   The public key's filename is what `apk` matches the signature against.
   `nfpm.yaml` fixes it as `pam-ssoossh`, so a host installs the public half
@@ -101,10 +111,12 @@ Repository secrets the release workflow reads:
 
 | secret | holds |
 | --- | --- |
-| `RELEASE_GPG_PRIVATE_KEY` | the armored OpenPGP private key |
+| `RELEASE_GPG_PRIVATE_KEY` | the armored OpenPGP private key; deb, rpm, SHA256SUMS |
 | `RELEASE_GPG_PASSPHRASE` | its passphrase, if it has one |
+| `RELEASE_APK_PRIVATE_KEY` | an unencrypted RSA private key in PEM; the apk |
 
-All optional. A release without them is unsigned and the job log says so.
+All optional, and each is checked before it is used: a key of the wrong
+kind leaves that one format unsigned rather than failing the release.
 Both public keys are attached to every release, as
 `pam-ssoossh-release-key.asc` and `pam-ssoossh.rsa.pub`; publish the
 OpenPGP fingerprint somewhere that is not the release page as well.
