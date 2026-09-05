@@ -335,7 +335,10 @@ static void show_console_prompt(pam_handle_t *pamh, attempt *a,
         }
     }
 #else
+    /* No QR on this platform, so the message ends at the code and the
+     * length that would have placed the QR after it goes unused. */
     (void)server;
+    (void)len;
 #endif
 
     rc = ssoossh_conv(pamh, PAM_TEXT_INFO, a->message, NULL);
