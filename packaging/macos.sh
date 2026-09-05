@@ -33,6 +33,12 @@
 #                           an export without the private key imports
 #                           cleanly and then signs nothing
 #   QUILL_SIGN_PASSWORD     the password of both files
+#
+# Both must be legacy-shape PKCS#12 -- what Keychain Access exports, and
+# what `openssl pkcs12 -export -legacy` writes. `security import` cannot
+# read an OpenSSL 3 default export (PBES2, AES-256-CBC, SHA-256 MAC): it
+# fails the MAC check and reports it as a wrong password, whatever the
+# password is.
 #   QUILL_NOTARY_ISSUER     App Store Connect API issuer id
 #   QUILL_NOTARY_KEY_ID     App Store Connect API key id
 #   QUILL_NOTARY_KEY        that key, PEM or the PEM's base64
@@ -155,20 +161,58 @@ dump_keychain() {
 # size of what that variable decoded to -- an empty, truncated or
 # wrong-field secret shows itself there first.
 #
-# No -f pkcs12, deliberately: the flag is what suppresses that line. With it
-# a successful import prints nothing at all, which is why the log of the run
-# this was written for said only that both imports had happened. Without it
-# the format is detected from the file, and the summary comes back.
+# No -f pkcs12, deliberately. The flag suppresses that line -- and worse, it
+# swallowed the failure underneath it: the import that fails below with "MAC
+# verification failed" exited 0 with the flag on, printing nothing, so an
+# empty keychain looked like a successful import and the run died three
+# commands later on a message about an item that could not be found. Without
+# the flag the format is read from the file, which is where it was written
+# anyway, and both the summary and the failure come back.
 import_p12() {
+    # What the variable decoded to, named before the keychain is involved
+    # at all. A PKCS#12 is DER, so it opens with a SEQUENCE -- 0x30 0x82 --
+    # and a field holding a PEM, a .cer, an already-decoded blob or nothing
+    # much fails that here, where the message can say so, rather than three
+    # lines down as a MAC failure that reads like a wrong password. The
+    # digest is the file's, not a secret: it is the one way to tell from a
+    # log whether the field holds the P12 you think it does, since the same
+    # command over the same file on your Mac prints the same 16 characters.
+    size=$(wc -c < "$2" | tr -d ' ')
+    digest=$(shasum -a 256 "$2" | cut -c1-16)
+    if [ "$(head -c 2 "$2" | od -An -tx1 | tr -d ' \n')" != 3082 ]; then
+        echo "macos: $1: $size bytes, sha256 $digest, first bytes" \
+            "$(head -c 8 "$2" | od -An -tx1)" >&2
+        echo "macos: $1 did not decode to a PKCS#12, which is DER and opens 30 82;" \
+            "the field holds something that is not the base64 of a .p12" >&2
+        exit 1
+    fi
     if out=$(security import "$2" -k "$keychain" \
         -P "${QUILL_SIGN_PASSWORD:-}" \
         -T /usr/bin/codesign -T /usr/bin/productsign \
         -T /usr/bin/security 2>&1); then
-        echo "macos: $1: $(wc -c < "$2" | tr -d ' ') bytes;" \
+        echo "macos: $1: $size bytes, sha256 $digest;" \
             "${out:-security import printed nothing}"
     else
-        echo "macos: $1: $(wc -c < "$2" | tr -d ' ') bytes;" \
+        echo "macos: $1: $size bytes, sha256 $digest;" \
             "security import failed: ${out:-no output}" >&2
+        case ${out:-} in
+        *"MAC verification failed"*)
+            # Two very different faults share this one message, and the
+            # second is the one nobody guesses: `security import` reads only
+            # the legacy PKCS#12 shape, and an OpenSSL 3 export -- PBES2,
+            # AES-256-CBC, SHA-256 MAC, which is its default -- fails the
+            # MAC check here whatever the password is. `openssl pkcs12
+            # -info -noout` over the same file names both the algorithms
+            # and, by not complaining, the password.
+            echo "macos: either QUILL_SIGN_PASSWORD is not the password $1 was" \
+                "exported with -- one password opens both P12s -- or $1 is an" \
+                "OpenSSL 3 style PKCS#12, which this importer cannot read whatever" \
+                "the password. Check with:" >&2
+            echo "    openssl pkcs12 -info -noout -in <the p12> -passin pass:<password>" >&2
+            echo "  \"MAC: sha256\" or \"AES-256-CBC\" there is the second fault; re-export it" \
+                "as \"openssl pkcs12 -export -legacy\", which Apple's importer accepts." >&2
+            ;;
+        esac
         exit 1
     fi
 }
