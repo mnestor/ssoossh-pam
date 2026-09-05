@@ -515,14 +515,14 @@ install: $(MODULE)
 	  echo "install: no PAM module directory found on this system;" \
 	       "pass SECURITYDIR=<dir>" >&2; exit 1; }
 	install -d $(DESTDIR)$(SECURITYDIR)
-	install -m 0644 $(MODULE) $(DESTDIR)$(SECURITYDIR)/pam_ssoossh.so
+	install -m 0644 $(MODULE) $(DESTDIR)$(SECURITYDIR)/$(MODULE)
 	install -d $(DESTDIR)$(MANDIR)/man8 $(DESTDIR)$(MANDIR)/man5
 	install -m 0644 docs/*.8 $(DESTDIR)$(MANDIR)/man8/
 	install -m 0644 docs/*.5 $(DESTDIR)$(MANDIR)/man5/
 	install -d $(DESTDIR)$(DOCDIR)/examples/pam.d
 	install -m 0644 docs/examples/pam.d/* $(DESTDIR)$(DOCDIR)/examples/pam.d/
 	install -m 0644 $(filter-out docs/examples/pam.d,$(wildcard docs/examples/*)) $(DESTDIR)$(DOCDIR)/examples/
-	@echo "installed $(DESTDIR)$(SECURITYDIR)/pam_ssoossh.so"
+	@echo "installed $(DESTDIR)$(SECURITYDIR)/$(MODULE)"
 	@echo "installed man pages under $(DESTDIR)$(MANDIR)"
 	@echo "installed examples under $(DESTDIR)$(DOCDIR)/examples"
 

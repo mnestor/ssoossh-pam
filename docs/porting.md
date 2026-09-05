@@ -99,6 +99,39 @@ purpose: the Go module hardcodes Linux-PAM's numeric return codes, so it is
 not a correct reference to compare against on OpenPAM. It would report
 `PAM_PERM_DENIED` where it means `PAM_AUTH_ERR`.
 
+### Installing it for real
+
+macOS ships no artifact and `make install` finds no module directory,
+because `/usr/lib/pam` is protected by System Integrity Protection. To use
+the module on a Mac anyway, give it a root-owned directory of its own and
+name it by absolute path:
+
+```console
+$ sudo make install SECURITYDIR=/usr/local/lib/pam
+installed /usr/local/lib/pam/pam_ssoossh.bundle
+```
+
+Then put the line in `/etc/pam.d/sudo_local`, not `/etc/pam.d/sudo`. Since
+macOS 13, `sudo` includes `sudo_local` first and macOS updates replace
+`sudo` while leaving `sudo_local` alone; Apple ships a template:
+
+```console
+$ sudo cp /etc/pam.d/sudo_local.template /etc/pam.d/sudo_local   # if absent
+```
+
+```
+# /etc/pam.d/sudo_local
+auth    sufficient  /usr/local/lib/pam/pam_ssoossh.bundle \
+                    server=https://ssoossh.example.com \
+                    trusted-ca-file=/etc/ssoossh/ca.pub \
+                    principals-map=/etc/ssoossh/principals.yaml
+```
+
+Keep a root shell open in another terminal until a second one has
+authenticated through the new line. One OpenPAM detail: `openpam_dynamic`
+tries `<path>.<version>` before `<path>`, so a `pam_ssoossh.bundle.2` lookup
+failing first in the log is expected, not an error.
+
 ### What is most likely to break, and why
 
 1. **The link fails on `-lcurl`.** The `curl` package is missing. This is the
