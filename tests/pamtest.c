@@ -19,6 +19,7 @@
 #    include <security/openpam.h>
 #    define SSOOSSH_CONV openpam_ttyconv
 #endif
+#include <signal.h>
 #include <stdio.h>
 
 int main(int argc, char **argv)
@@ -26,11 +27,23 @@ int main(int argc, char **argv)
     const char *service = (argc > 1) ? argv[1] : "ssoossh-test";
     pam_handle_t *p = NULL;
     struct pam_conv conv = {SSOOSSH_CONV, NULL};
+    sigset_t block;
 
     /* Unbuffered, so the approval URL reaches a pipe reader (tee, or the
      * e2e harness) while pam_authenticate is still blocked waiting on the
      * browser. */
     setbuf(stdout, NULL);
+
+    /* sudo runs its policy check -- the whole auth stack -- with the tty
+     * signals blocked in the process mask, and re-raises whatever arrived
+     * once the check is over. A module that only installs a SIGINT handler
+     * never sees a Ctrl-C there: the signal sits pending until the module
+     * has given up on its own. Block it here the same way, so the cancel
+     * scenarios exercise what sudo does rather than the easier case where
+     * a handler alone is enough. */
+    sigemptyset(&block);
+    sigaddset(&block, SIGINT);
+    (void)sigprocmask(SIG_BLOCK, &block, NULL);
 
     int r = pam_start(service, "games", &conv, &p);
     if (r != PAM_SUCCESS) {
