@@ -17,10 +17,16 @@ concurrency:
 
 # Build dependencies, once per image family. A matrix row names its family
 # and the install step looks the command up here.
+#
+# ca-certificates is a dependency of the checkout, not of the build: the
+# debian image ships no trust store, so git over https cannot verify
+# github.com and actions/checkout fails before anything is compiled. The
+# el and alpine images already carry one.
 env:
   INSTALL_debian: apt-get update && apt-get install -y --no-install-recommends
-    build-essential pkg-config libssl-dev libcurl4-openssl-dev libpam0g-dev
-    libpam-runtime libpam-modules git openssh-client python3
+    ca-certificates build-essential pkg-config libssl-dev
+    libcurl4-openssl-dev libpam0g-dev libpam-runtime libpam-modules git
+    openssh-client python3
   INSTALL_alpine: apk add --no-cache build-base pkgconf openssl-dev curl-dev
     linux-pam-dev linux-pam git compiler-rt openssh-keygen python3 bash
   INSTALL_el: dnf install -y gcc make pkgconf-pkg-config openssl-devel
@@ -141,8 +147,9 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential clang libclang-rt-dev pkg-config libssl-dev \
-            libcurl4-openssl-dev libpam0g-dev git openssh-client
+            ca-certificates build-essential clang libclang-rt-dev \
+            pkg-config libssl-dev libcurl4-openssl-dev libpam0g-dev git \
+            openssh-client
 
       - uses: actions/checkout@v4
 
