@@ -500,15 +500,21 @@ neither is this module's to touch. Every message carries its own
 .B pam_ssoossh:
 prefix instead.
 .PP
-Each attempt logs one unconditional line naming the module version and the
-crypto and HTTP libraries actually linked into the process:
+Each attempt logs one unconditional line naming the module version, the
+.B ssoosshd
+release it was qualified against, and the crypto and HTTP libraries actually
+linked into the process:
 .PP
 .RS
 .nf
-pam_ssoossh: 1.0.0 | crypto: OpenSSL 1.1.1k | fips: off | http: libcurl/7.61.1 OpenSSL/1.1.1k
+pam_ssoossh: 1.0.0 | ssoosshd: v1.0.0 | crypto: OpenSSL 1.1.1k | fips: off | http: libcurl/7.61.1 OpenSSL/1.1.1k
 .fi
 .RE
 .PP
+The
+.B ssoosshd
+field is the server release this build was tested against, not the server
+it is talking to; the module and the server are versioned independently.
 The module links crypto rather than shipping it, so which OpenSSL is
 resident in
 .BR sudo (8),

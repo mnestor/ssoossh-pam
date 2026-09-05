@@ -10,6 +10,9 @@
 #ifndef PAM_SSOOSSH_VERSION
 #    define PAM_SSOOSSH_VERSION "dev"
 #endif
+#ifndef PAM_SSOOSSH_COMPAT
+#    define PAM_SSOOSSH_COMPAT "unknown"
+#endif
 
 /* Per-process, not per-transaction. A PAM transaction that turns debug on
  * affects concurrent transactions in the same process, which is the same
@@ -71,6 +74,11 @@ void ssoossh_log_version(void)
      * authentication is what makes that a syslog grep across a fleet
      * instead of guesswork -- including for a host whose distribution has
      * stopped issuing updates. */
+    /* The ssoosshd field is the server release this build was qualified
+     * against (SSOOSSHD_COMPAT in the Makefile), not the server it is
+     * talking to: the module never learns that. The two are versioned
+     * independently, so this is what answers "does this module match my
+     * server" from syslog alone. */
     /* The FIPS field only where the platform has the switch, so a Mac's
      * line does not claim a mode it cannot be in. */
     const char *fips;
@@ -87,6 +95,7 @@ void ssoossh_log_version(void)
         fips = "";
         break;
     }
-    ssoossh_infof("%s | crypto: %s%s | http: %s", PAM_SSOOSSH_VERSION,
+    ssoossh_infof("%s | ssoosshd: %s | crypto: %s%s | http: %s",
+                  PAM_SSOOSSH_VERSION, PAM_SSOOSSH_COMPAT,
                   ssoossh_crypto_version(), fips, ssoossh_httpc_version());
 }

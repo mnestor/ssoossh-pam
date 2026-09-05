@@ -50,6 +50,7 @@ field() {
 }
 describe=$(field version)
 target=$(field target)
+compat=$(field ssoosshd)
 if [ -z "$describe" ] || [ -z "$target" ]; then
     echo "package: $tarball has no usable BUILDINFO" >&2
     exit 1
@@ -130,7 +131,8 @@ for fmt in $formats; do
     # environment exported below.
     sed "s|@SECURITYDIR@|$PKG_SECURITYDIR|g" "$here/nfpm.yaml" > "$stage/nfpm.yaml"
     export PKG_ARCH PKG_VERSION PKG_PRERELEASE PKG_MAINTAINER PKG_HOMEPAGE \
-        PKG_TARGET="$target" PKG_CRYPTO_SO PKG_DEB_CRYPTO \
+        PKG_TARGET="$target" PKG_COMPAT="${compat:-unknown}" \
+        PKG_CRYPTO_SO PKG_DEB_CRYPTO \
         PKG_GPG_KEY_FILE PKG_APK_KEY_FILE
     # From inside the staging directory: nfpm resolves content sources
     # relative to the working directory.

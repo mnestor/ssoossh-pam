@@ -24,7 +24,8 @@ description: |
   PAM module authenticating against ssoosshd.
   Loads into sudo, sshd and login; links the operating system's own
   libcrypto, libcurl and libpam and ships no crypto of its own.
-  Built for ${PKG_TARGET}: see /usr/share/doc/pam-ssoossh/BUILDINFO.
+  Built for ${PKG_TARGET} and qualified against ssoosshd ${PKG_COMPAT}:
+  see /usr/share/doc/pam-ssoossh/BUILDINFO.
 
 # Sources are relative to the staging directory package.sh unpacks the
 # tarball into and runs nfpm from. @SECURITYDIR@ is substituted by that

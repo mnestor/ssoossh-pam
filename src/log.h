@@ -26,8 +26,9 @@ void ssoossh_noticef(const char *fmt, ...)
 void ssoossh_warnf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void ssoossh_errf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
-/* Logs the module version and the versions of the crypto and HTTP libraries
- * actually linked into this process, at LOG_INFO, unconditionally.
+/* Logs the module version, the ssoosshd release it was qualified against,
+ * and the versions of the crypto and HTTP libraries actually linked into
+ * this process, at LOG_INFO, unconditionally.
  *
  * Unconditional because a module that only reports its version once debug is
  * already enabled is a worse support problem than one extra line per sudo.

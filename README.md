@@ -202,7 +202,7 @@ the same corecrypto call CryptoKit makes. The backend resolves both with
 use, and reports the outcome in the version line every authentication logs:
 
 ```
-pam_ssoossh: 1.0.0 | crypto: Security.framework (Ed25519 SPI ok) | http: ...
+pam_ssoossh: 1.0.0 | ssoosshd: v1.0.0 | crypto: Security.framework (Ed25519 SPI ok) | http: ...
 ```
 
 A macOS that stops exporting the SPI degrades to "ssh-ed25519 unsupported"
@@ -220,8 +220,14 @@ module reports the versions it actually linked, at `LOG_INFO`, on every
 authentication:
 
 ```
-pam_ssoossh: 1.0.0 | crypto: OpenSSL 1.1.1k | fips: off | http: libcurl/7.61.1 OpenSSL/1.1.1k
+pam_ssoossh: 1.0.0 | ssoosshd: v1.0.0 | crypto: OpenSSL 1.1.1k | fips: off | http: libcurl/7.61.1 OpenSSL/1.1.1k
 ```
+
+The `ssoosshd` field is the server release this build was qualified against
+(`SSOOSSHD_COMPAT` in the Makefile), not the server it is talking to. The
+module and the server are versioned independently — a fix to the console
+flow here needs no server release, and vice versa — so this is the line to
+grep when asking whether a fleet's modules match its server.
 
 The `fips` field is the host's FIPS mode, read from the kernel flag and from
 OpenSSL's own switch. The module defers to it rather than reasoning about

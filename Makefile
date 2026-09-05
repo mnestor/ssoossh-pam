@@ -63,6 +63,15 @@ endif
 # LOG_INFO on every authentication -- see src/log.c.
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
+# The ssoosshd release this module was last qualified against. The module
+# and the server are versioned independently -- a QR fix here needs no
+# server release, and vice versa -- so this is the compatibility fact a
+# fleet actually needs, and it travels with the version: logged on every
+# authentication, printed in the dist manifest, named in the packages.
+# Bumping it is the deliberate act of re-running the differential harness
+# and the end-to-end scenarios against a newer server.
+SSOOSSHD_COMPAT ?= v1.0.0
+
 # An alternate OpenSSL for a host whose distribution has stopped issuing
 # updates:  make OPENSSL_PREFIX=/opt/openssl-3.5
 # See the plan's "Crypto on an unsupported distribution". Ignored on macOS,
@@ -115,7 +124,8 @@ CFLAGS  += -std=c11 -O2 -fPIC \
            -Wstrict-prototypes -Wmissing-prototypes -Werror \
            -fstack-protector-strong \
            -D_FORTIFY_SOURCE=2 \
-           -DPAM_SSOOSSH_VERSION='"$(VERSION)"'
+           -DPAM_SSOOSSH_VERSION='"$(VERSION)"' \
+           -DPAM_SSOOSSH_COMPAT='"$(SSOOSSHD_COMPAT)"'
 CPPFLAGS += -Isrc
 
 PKGS    := libcrypto libcurl
@@ -351,6 +361,7 @@ $(BUILD)/fuzz/%: tests/fuzz/%.c $(SRC) | $(BUILD)/fuzz
 	$(FUZZ_CC) $(CPPFLAGS) -std=c11 -g -O1 \
 	    -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer \
 	    -D_GNU_SOURCE -DPAM_SSOOSSH_VERSION='"$(VERSION)"' \
+	    -DPAM_SSOOSSH_COMPAT='"$(SSOOSSHD_COMPAT)"' \
 	    -o $@ $< $(SRC) $(if $(VENDOR),$(VENDOR),) $(LDLIBS)
 
 fuzz: $(FUZZ_BINS)
@@ -478,6 +489,7 @@ dist: unsanitised
 	{ \
 	  echo "package:   $(DIST_NAME)"; \
 	  echo "version:   $(VERSION)"; \
+	  echo "ssoosshd:  $(SSOOSSHD_COMPAT)"; \
 	  echo "target:    $(DIST_TARGET)"; \
 	  echo "built:     $$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
 	  echo "host:      $$(uname -srm)"; \
@@ -561,4 +573,5 @@ help:
 	@echo "make install    install into $(if $(SECURITYDIR),$(SECURITYDIR),<no PAM module dir found>)"
 	@echo ""
 	@echo "VERSION=$(VERSION)"
+	@echo "SSOOSSHD_COMPAT=$(SSOOSSHD_COMPAT)  the ssoosshd release this build was qualified against"
 	@echo "OPENSSL_PREFIX= build against a self-maintained OpenSSL"
