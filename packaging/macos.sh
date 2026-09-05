@@ -34,11 +34,13 @@
 #                           cleanly and then signs nothing
 #   QUILL_SIGN_PASSWORD     the password of both files
 #
-# Both must be legacy-shape PKCS#12 -- what Keychain Access exports, and
-# what `openssl pkcs12 -export -legacy` writes. `security import` cannot
-# read an OpenSSL 3 default export (PBES2, AES-256-CBC, SHA-256 MAC): it
-# fails the MAC check and reports it as a wrong password, whatever the
-# password is.
+# Both must be legacy-shape PKCS#12, which is what `openssl pkcs12 -export
+# -legacy` writes. `security import` cannot read the shape a newer macOS
+# produces (PBES2, AES-256-CBC, SHA-256 MAC): it fails the MAC check and
+# reports it as a wrong password, whatever the password is. Keychain Access
+# on macOS 26 exports that newer shape, so a P12 exported there does not
+# import on the macOS 15 runner this job uses, and has to be converted once
+# on the way into the secret store.
 #   QUILL_NOTARY_ISSUER     App Store Connect API issuer id
 #   QUILL_NOTARY_KEY_ID     App Store Connect API key id
 #   QUILL_NOTARY_KEY        that key, PEM or the PEM's base64
@@ -198,19 +200,24 @@ import_p12() {
         case ${out:-} in
         *"MAC verification failed"*)
             # Two very different faults share this one message, and the
-            # second is the one nobody guesses: `security import` reads only
-            # the legacy PKCS#12 shape, and an OpenSSL 3 export -- PBES2,
-            # AES-256-CBC, SHA-256 MAC, which is its default -- fails the
-            # MAC check here whatever the password is. `openssl pkcs12
-            # -info -noout` over the same file names both the algorithms
-            # and, by not complaining, the password.
+            # second is the one nobody guesses: this importer reads only the
+            # legacy PKCS#12 shape, and a P12 written with PBES2,
+            # AES-256-CBC and a SHA-256 MAC fails the MAC check here
+            # whatever the password is. That shape is not exotic -- it is
+            # what Keychain Access on macOS 26 writes, and what OpenSSL 3
+            # writes by default -- so a P12 exported on a Mac newer than the
+            # one this runs on lands here with a correct password and a
+            # message that blames it. `openssl pkcs12 -info -noout` over the
+            # same file names the algorithms and, by not complaining, clears
+            # the password.
             echo "macos: either QUILL_SIGN_PASSWORD is not the password $1 was" \
-                "exported with -- one password opens both P12s -- or $1 is an" \
-                "OpenSSL 3 style PKCS#12, which this importer cannot read whatever" \
-                "the password. Check with:" >&2
+                "exported with -- one password opens both P12s -- or $1 is in the" \
+                "PKCS#12 shape a newer macOS writes and this one cannot read," \
+                "whatever the password. Check with:" >&2
             echo "    openssl pkcs12 -info -noout -in <the p12> -passin pass:<password>" >&2
-            echo "  \"MAC: sha256\" or \"AES-256-CBC\" there is the second fault; re-export it" \
-                "as \"openssl pkcs12 -export -legacy\", which Apple's importer accepts." >&2
+            echo "  \"MAC: sha256\" or \"AES-256-CBC\" there is the second fault. Convert it:" >&2
+            echo "    openssl pkcs12 -in <the p12> -nodes -passin env:PW |" >&2
+            echo "        openssl pkcs12 -export -legacy -passout env:PW -out <new p12>" >&2
             ;;
         esac
         exit 1
