@@ -140,7 +140,27 @@ int suite_ed25519(void)
      *   6-7  S >= L                             rejected
      *   8-9  non-canonical R                    rejected
      *   10   non-canonical A                    rejected
-     *   11   non-canonical A, other form        accepted */
+     *   11   non-canonical A, other form        accepted -- except on macOS
+     *
+     * Case 11 is where Apple has moved since that table was published.
+     * Its A is the order-2 point (0, -1) encoded with the sign bit set: RFC
+     * 8032 §5.1.3 says decoding fails when x is 0 and the sign bit is 1,
+     * while the ref10 lineage OpenSSL, BoringSSL and Go descend from never
+     * checked, so they decode it and the equation holds. The 2020 table
+     * recorded CryptoKit as lenient too; the corecrypto behind today's
+     * Security.framework is strict, and rejects it (observed on macOS
+     * 26.6; apple-drift is where an older release disagreeing would show).
+     *
+     * The divergence is confined to a CA whose public key is a torsion
+     * point nobody can hold a private key for, so no real certificate can
+     * verify on one platform and not the other, and the strict answer is
+     * the safer one. It is pinned per platform rather than papered over
+     * so that a change in either direction is still a failure by name. */
+#ifdef __APPLE__
+#    define SPECCHECK_11 SSOOSSH_VERIFY_BAD
+#else
+#    define SPECCHECK_11 SSOOSSH_VERIFY_OK
+#endif
     static const vector speccheck[] = {
         {"speccheck 0",
          "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
@@ -213,7 +233,7 @@ int suite_ed25519(void)
          "39a591f5321bbe07fd5a23dc2f39d025d74526615746727ceefd6e82ae65c06f",
          "a9d55260f765261eb9b84e106f665e00b867287a761990d7135963ee0a7d59dc"
          "a5bb704786be79fc476f91d3f3f89b03984d8068dcf1bb7dfc6637b45450ac04",
-         SSOOSSH_VERIFY_OK},
+         SPECCHECK_11},
     };
 
     /* The one acceptable reason to have no Ed25519 is a FIPS

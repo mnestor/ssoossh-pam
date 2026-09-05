@@ -296,11 +296,19 @@ same corecrypto call CryptoKit makes. The evidence, all checkable:
   constant itself and calls `SecKeyCreateWithData` with it, exactly as
   this backend does.
 
-Semantics match the other platforms. Third-party edge-case testing of
-CryptoKit (the ed25519-speccheck suite, which sits on the same corecrypto
-call) gives the same accept/reject row as OpenSSL 3, BoringSSL and Go, so
-a certificate cannot verify on Linux and fail on a Mac or the reverse.
-`tests/unit/ed25519_test.c` pins that row on every platform.
+Semantics match the other platforms in every case that a real key can
+reach. The ed25519-speccheck edge cases (which sit on the same corecrypto
+call CryptoKit uses) give the same accept/reject row as OpenSSL 3,
+BoringSSL and Go on eleven of the twelve; on the twelfth -- case 11, a
+public key that is the order-2 point with the sign bit set -- today's
+corecrypto decodes per RFC 8032 §5.1.3 and refuses it, where the ref10
+lineage the others descend from decodes it and accepts. The 2020 speccheck
+table recorded CryptoKit as lenient there too, so this is Apple having
+moved. Nobody holds a private key for a torsion point, so no certificate
+can verify on Linux and fail on a Mac or the reverse; the strict answer is
+the safer one and is what `tests/unit/ed25519_test.c` pins on macOS, with
+the lenient one pinned everywhere else, so a change in either direction on
+any platform still fails by name.
 
 ### What the backend does with it
 
