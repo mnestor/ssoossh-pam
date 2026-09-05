@@ -1,13 +1,14 @@
 # Building and testing on FreeBSD and macOS
 
-**Neither platform has ever been compiled.** The Makefile branches, the
-`ld64` symbol list, and `src/crypto_darwin.c` are all written, and none of it
-has been near a machine that could run it. This document is the sequence to
-follow the first time, what is likely to break, and how to tell a real
-problem from an assumption that was simply wrong.
+**FreeBSD has never been compiled.** Its Makefile branch is written and has
+not been near a machine that could run it. macOS has been built and run by
+hand on Apple silicon — the `ld64` symbol list, `src/crypto_darwin.c`, the
+e2e suite — but not yet on a hosted runner. This document is the sequence
+to follow the first time on each, what is likely to break, and how to tell
+a real problem from an assumption that was simply wrong.
 
 Everything on Linux — glibc, musl, and the RHEL 8 floor — is verified. These
-two are not.
+two are not to the same degree.
 
 The same sequence runs unattended in
 [`.github/workflows/cross-platform.yml`](../.github/workflows/cross-platform.yml),
@@ -25,14 +26,17 @@ contain, which is where most of the answers are.
 
 ## Why the two platforms differ in importance
 
-**FreeBSD ships an artifact. macOS does not.** FreeBSD is the OpenPAM target
-that reaches real hosts, so a bug there matters in production. macOS exists
-to keep the OpenPAM paths, the `ld64` symbol list, and the
-Security.framework backend under test on every commit — it ships nothing,
-console mode is not compiled into it, and nothing installs under System
-Integrity Protection.
+**Both ship an artifact, differently.** FreeBSD ships a tarball and is the
+OpenPAM target that reaches server hosts, so a bug there matters in
+production. macOS ships a signed installer package
+(`packaging/macos.sh`) that puts the module under `/usr/local/lib/pam`,
+because nothing may install under System Integrity Protection; console
+mode is not compiled into it. Its build also keeps the OpenPAM paths, the
+`ld64` symbol list, and the Security.framework backend under test on every
+commit.
 
-If you only have time for one, do FreeBSD.
+If you only have time for one, do FreeBSD: macOS has at least been run by
+hand.
 
 ---
 

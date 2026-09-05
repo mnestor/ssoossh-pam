@@ -1,8 +1,9 @@
 name: Release
 
 # Builds every artifact the README says ships, gates each one the way CI
-# does, wraps the Linux ones as deb, rpm and apk, and publishes the lot as
-# one GitHub release with checksums and build provenance.
+# does, wraps the Linux ones as deb, rpm and apk and the macOS one as a
+# signed installer package, and publishes the lot as one GitHub release
+# with checksums and build provenance.
 #
 # Plain actions, nfpm and `gh`, not goreleaser: goreleaser is built around
 # producing the binaries itself, which for C means either a paid "prebuilt"
@@ -18,6 +19,7 @@ name: Release
 #   linux-x86_64-glibc-openssl1.1   RHEL 8 and its rebuilds
 #   linux-x86_64-musl               Alpine
 #   freebsd14-x86_64                FreeBSD 14
+#   macos15-aarch64                 macOS 15 and later, Apple silicon
 #
 # and aarch64 for each Linux row. The glibc rows are built on the *oldest*
 # glibc that carries that OpenSSL -- AlmaLinux 9 for OpenSSL 3, AlmaLinux 8
@@ -168,10 +170,116 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # A hosted Mac, Apple silicon only: Apple's Intel line is at end of life,
+  # and the bundle links nothing that would want a second slice. The
+  # target name carries the deployment floor rather than the runner's
+  # release, so this stays macos15-aarch64 when the runner label moves.
+  #
+  # The installer package is built here rather than in the release job,
+  # because pkgbuild, productbuild, codesign and notarytool exist only on
+  # macOS. The signing identities and the notary key come from 1Password
+  # -- the same item the ssoossh server's quill setup reads -- through a
+  # service account token in the repository secrets. Without that token
+  # the package is built unsigned and the log says so, as with the GPG and
+  # apk keys in the release job.
+  macos:
+    name: macos15-aarch64
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      HAVE_OP: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: The image matches the target name
+        run: |
+          sw_vers
+          got=$(tests/dist-target.sh)
+          echo "image reports: $got"
+          test "$got" = macos15-aarch64
+
+      # The Ed25519 SPI the Darwin backend resolves at runtime, in this
+      # SDK's export list before anything is built -- see apple-drift.yml.
+      - name: Ed25519 SPI still exported by this SDK
+        run: tests/apple-spi-check.sh --sdk "$(xcrun --show-sdk-path)"
+
+      - name: Build
+        run: make
+
+      # The same gates cross-platform.yml runs.
+      - name: Symbol, load and unit gates
+        run: make test
+
+      - name: Ed25519 SPI works on this macOS
+        run: make check-apple-spi
+
+      - name: No stdio in the module
+        run: make check-stdio
+
+      - name: Size gate
+        run: make check-size
+
+      # Loads the bundle by absolute path and reads the log through
+      # `log stream` -- see docs/porting.md.
+      - name: End to end against a stub server
+        run: |
+          make tests/pamtest
+          sudo make e2e
+
+      - name: Package
+        run: make dist DIST_TARGET=macos15-aarch64
+
+      # Only when the token is set, so a fork without it still gets its
+      # (unsigned) package. The step's outputs are empty when it is
+      # skipped, which packaging/macos.sh reads as "unsigned".
+      - name: Signing material
+        id: secrets
+        if: ${{ env.HAVE_OP == 'true' }}
+        uses: 1password/load-secrets-action@e544b780808654ba8ceba5fb2fe2897103d92ff4 # v5.0.0
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          QUILL_SIGN_P12: op://Github Actions/oqwo32gbo3ktrgutdcvzsr6msy/QUILL_SIGN_P12
+          QUILL_SIGN_PASSWORD: op://Github Actions/oqwo32gbo3ktrgutdcvzsr6msy/QUILL_SIGN_PASSWORD
+          QUILL_NOTARY_ISSUER: op://Github Actions/oqwo32gbo3ktrgutdcvzsr6msy/QUILL_NOTARY_ISSUER
+          QUILL_NOTARY_KEY_ID: op://Github Actions/oqwo32gbo3ktrgutdcvzsr6msy/QUILL_NOTARY_KEY_ID
+          QUILL_NOTARY_KEY: op://Github Actions/oqwo32gbo3ktrgutdcvzsr6msy/QUILL_NOTARY_KEY
+          # The package needs a "Developer ID Installer" identity as well as
+          # the "Developer ID Application" one quill uses. If QUILL_SIGN_P12
+          # does not hold both, put the Installer one in a second field
+          # and uncomment this line and the one in the step below. A
+          # reference to a field that does not exist fails the step, which
+          # is why it is not simply always on.
+          # QUILL_INSTALLER_P12: op://Github Actions/oqwo32gbo3ktrgutdcvzsr6msy/QUILL_INSTALLER_P12
+
+      - name: Installer package, signed and notarized
+        env:
+          QUILL_SIGN_P12: ${{ steps.secrets.outputs.QUILL_SIGN_P12 }}
+          QUILL_SIGN_PASSWORD: ${{ steps.secrets.outputs.QUILL_SIGN_PASSWORD }}
+          QUILL_NOTARY_ISSUER: ${{ steps.secrets.outputs.QUILL_NOTARY_ISSUER }}
+          QUILL_NOTARY_KEY_ID: ${{ steps.secrets.outputs.QUILL_NOTARY_KEY_ID }}
+          QUILL_NOTARY_KEY: ${{ steps.secrets.outputs.QUILL_NOTARY_KEY }}
+          # QUILL_INSTALLER_P12: ${{ steps.secrets.outputs.QUILL_INSTALLER_P12 }}
+        run: |
+          packaging/package.sh dist/*.tar.gz dist
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos15-aarch64
+          path: |
+            dist/*.tar.gz
+            dist/*.pkg
+          if-no-files-found: error
+          retention-days: 7
+
   # Everything into one place, checksummed, attested, published.
   release:
     name: release
-    needs: [linux, freebsd]
+    needs: [linux, freebsd, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write      # gh release create
@@ -192,8 +300,9 @@ jobs:
       - name: Every artifact arrived
         run: ls -l dist
 
-      # deb, rpm and apk from the Linux tarballs. nfpm is pinned by version
-      # and hash; bump both together from
+      # deb, rpm and apk from the Linux tarballs; the macOS tarball is
+      # passed over here, its package having been built on the Mac. nfpm is
+      # pinned by version and hash; bump both together from
       # https://github.com/goreleaser/nfpm/releases.
       - name: Install nfpm
         env:
@@ -250,7 +359,8 @@ jobs:
           ls -l dist
 
       # SHA256SUMS covers everything, and the GPG signature over it covers
-      # the tarballs, which have no signature of their own. The public key
+      # the tarballs, which have no signature of their own (the pkg carries
+      # Apple's, and is listed so one file names every artifact). The public key
       # is published beside it so a first-time verifier has something to
       # import; its fingerprint belongs in the README too, so the release
       # is not the only place the key is vouched for.
@@ -259,7 +369,7 @@ jobs:
           NFPM_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
         run: |
           cd dist
-          sha256sum -- *.tar.gz *.deb *.rpm *.apk | tee SHA256SUMS
+          sha256sum -- *.tar.gz *.deb *.rpm *.apk *.pkg | tee SHA256SUMS
           if [ -n "${PKG_GPG_KEY_FILE:-}" ]; then
             export GNUPGHOME="$SIGNING_KEYS/gnupg"
             mkdir -p "$GNUPGHOME" && chmod 700 "$GNUPGHOME"
@@ -286,6 +396,7 @@ jobs:
             dist/*.deb
             dist/*.rpm
             dist/*.apk
+            dist/*.pkg
 
       - name: Publish the release
         if: ${{ github.ref_type == 'tag' }}
@@ -300,7 +411,8 @@ jobs:
           gh release create "$GITHUB_REF_NAME" $pre \
             --verify-tag --generate-notes \
             --title "$GITHUB_REF_NAME" \
-            dist/*.tar.gz dist/*.deb dist/*.rpm dist/*.apk dist/SHA256SUMS* dist/*.asc dist/*.pub
+            dist/*.tar.gz dist/*.deb dist/*.rpm dist/*.apk dist/*.pkg \
+            dist/SHA256SUMS* dist/*.asc dist/*.pub
 
       # On a manual run there is no tag and no release: the merged set is
       # kept as a workflow artifact for inspection instead.

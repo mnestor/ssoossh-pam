@@ -4,12 +4,16 @@
 #
 #   linux-x86_64-glibc-openssl3     linux-aarch64-musl
 #   linux-x86_64-glibc-openssl1.1   freebsd14-x86_64
+#   macos15-aarch64
 #
 # The name carries what decides whether the module will *load* on a host,
 # because it links the host's libraries rather than shipping them: the C
 # library ABI, and on glibc which libcrypto soname it was linked against
 # (musl distributions all carry OpenSSL 3 by now, so the name stays short).
 # FreeBSD carries its major release, since base OpenSSL changes with it.
+# macOS carries the deployment target rather than the building Mac's
+# release: the bundle links only what ships with the OS and is built with
+# -mmacosx-version-min, so it loads on that release and every later one.
 #
 # The release workflow compares this against the matrix entry it expected,
 # so a container image that quietly changes what it ships fails the build
@@ -48,8 +52,13 @@ freebsd)
     echo "freebsd$(uname -r | cut -d. -f1)-$arch"
     ;;
 darwin)
-    # Never shipped; named so `make dist` still works for a local look.
-    echo "macos$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)-$arch"
+    # The floor is the Makefile's MINVER, read from the file rather than
+    # asked of make: the Makefile runs this script to name `make dist`, so
+    # running make from here would recurse without end. The running
+    # release only if the Makefile is somehow not beside this script.
+    floor=$(sed -n 's/^ *MINVER *?= *//p' "$(dirname "$0")/../Makefile" 2>/dev/null | head -1)
+    [ -n "$floor" ] || floor=$(sw_vers -productVersion 2>/dev/null)
+    echo "macos${floor%%.*}-$arch"
     ;;
 *)
     echo "$os-$arch"

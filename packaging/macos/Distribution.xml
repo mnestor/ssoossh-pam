@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  productbuild's description of the installer: what it is called, what it
+  refuses to install on, and which panes it shows. Every @NAME@ is filled
+  in by packaging/macos.sh from the tarball's BUILDINFO.
+
+  hostArchitectures is arm64 alone, on purpose: Apple's Intel line is at
+  end of life, and a package that lists only arm64 tells an Intel Mac so in
+  the installer rather than with a module that fails to load. The OS floor
+  is the deployment target the module was built with.
+-->
+<installer-gui-script minSpecVersion="2">
+    <title>pam_ssoossh @VERSION@</title>
+    <options customize="never" require-scripts="false"
+             hostArchitectures="arm64" rootVolumeOnly="true"/>
+    <domains enable_localSystem="true"/>
+    <volume-check>
+        <allowed-os-versions>
+            <os-version min="@MINVER@"/>
+        </allowed-os-versions>
+    </volume-check>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <readme file="readme.html" mime-type="text/html"/>
+    <license file="LICENSE.txt" mime-type="text/plain"/>
+    <choices-outline>
+        <line choice="default">
+            <line choice="@IDENTIFIER@"/>
+        </line>
+    </choices-outline>
+    <choice id="default"/>
+    <choice id="@IDENTIFIER@" visible="false">
+        <pkg-ref id="@IDENTIFIER@"/>
+    </choice>
+    <pkg-ref id="@IDENTIFIER@" version="@PKGVER@" onConclusion="none">component.pkg</pkg-ref>
+</installer-gui-script>

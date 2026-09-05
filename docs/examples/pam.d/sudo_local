@@ -1,0 +1,29 @@
+# pam_ssoossh for sudo(8) on macOS: approve in a browser instead of typing a
+# password -- for a session that arrived over SSH. Someone at the keyboard
+# keeps Touch ID.
+#
+# macOS includes /etc/pam.d/sudo_local from /etc/pam.d/sudo and leaves it
+# alone across OS updates, which is why the line goes here and not in sudo
+# itself. Create it from Apple's template if it does not exist:
+#
+#   sudo cp /etc/pam.d/sudo_local.template /etc/pam.d/sudo_local
+#
+# The module is named by absolute path. /usr/lib/pam, where OpenPAM looks a
+# bare name up, is protected by System Integrity Protection, so the installer
+# package puts the module under /usr/local/lib/pam instead.
+#
+# `ssh-only`: a login at the console returns PAM_IGNORE from this line and
+# goes on to pam_tid.so below, which is Touch ID; a login that arrived over
+# ssh(1), where there is no Touch ID to offer, gets the browser flow.
+#
+# `sufficient`: an approval ends the stack; a denial, a timeout, Ctrl-C or an
+# unreachable server falls through to whatever follows -- Touch ID, then the
+# password prompt. Do not use `required` or `requisite` here.
+#
+# Test from a second root shell that is already open, not from this one.
+
+auth    sufficient  /usr/local/lib/pam/pam_ssoossh.so server=https://ssoossh.example.com \
+                    trusted-ca-file=/etc/ssoossh/ca.pub \
+                    principals-map=/etc/ssoossh/principals.yaml \
+                    ssh-only timeout=60s
+auth    sufficient  pam_tid.so

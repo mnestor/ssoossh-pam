@@ -170,7 +170,7 @@ Build dependencies are libpam, libcrypto and libcurl:
 | Linux glibc (x86-64, arm64) | OpenSSL ≥ 1.1.1 | yes | yes |
 | Linux musl / Alpine | OpenSSL ≥ 1.1.1 | yes | yes |
 | FreeBSD | OpenSSL in base | yes | yes |
-| macOS 15 Sequoia (arm64) | Security.framework | no | no — developer and CI only |
+| macOS 15+ (Apple silicon) | Security.framework | no | yes — a signed `.pkg` |
 
 **OpenSSL 1.1.1 is a hard floor**, set by RHEL 8. A build against anything
 older fails at compile time. OpenSSL 1.0.2 and the releases carrying it
@@ -300,9 +300,10 @@ divergences remain and both are intended: Ctrl-C returns `PAM_IGNORE` here
 and `PAM_AUTH_ERR` there, and an `ssh-rsa` (SHA-1) certificate is refused
 here and accepted there.
 
-**Not verified:** a run against a production `ssoosshd`; FreeBSD and macOS,
-whose Makefile branches and crypto backend exist but have never been
-compiled, let alone executed; and console mode against the real server
+**Not verified:** a run against a production `ssoosshd`; FreeBSD, whose
+Makefile branch exists but has never been compiled, let alone executed;
+macOS on a hosted runner, which has been built and run by hand on Apple
+silicon but not yet in CI; and console mode against the real server
 endpoints, which exist in the monorepo but have only been driven from a
 stub written against them.
 
@@ -326,7 +327,8 @@ and the sonames it needs. The name says where it loads, because the module
 links the host's libraries rather than shipping them. The Linux tarballs are
 also wrapped as distribution packages by [nfpm](https://nfpm.goreleaser.com)
 (`packaging/`), which install the module where that distribution's libpam
-looks and declare the sonames it needs:
+looks and declare the sonames it needs, and the macOS one as an installer
+package built with Apple's own tools:
 
 | artifact | for | package |
 | --- | --- | --- |
@@ -334,24 +336,32 @@ looks and declare the sonames it needs:
 | `linux-{x86_64,aarch64}-glibc-openssl1.1` | RHEL 8 and rebuilds, anything with `libcrypto.so.1.1` | `.rpm` |
 | `linux-{x86_64,aarch64}-musl` | Alpine | `.apk` |
 | `freebsd14-x86_64` | FreeBSD 14 | tarball only |
+| `macos15-aarch64` | macOS 15 and later on Apple silicon | `.pkg`, Developer ID signed and notarized |
 
 The packages install nothing into `/etc/pam.d`; wiring the module into a
 service stanza stays an operator's decision, as
 [`pam_ssoossh(8)`](docs/pam_ssoossh.8) describes. `make packages` builds
-them locally from `make dist` if nfpm is installed.
+them locally from `make dist` — with nfpm on Linux, with `pkgbuild` on a
+Mac. The macOS package puts the module at `/usr/local/lib/pam/pam_ssoossh.so`,
+since `/usr/lib/pam` is protected by System Integrity Protection, and a
+`pam.d` line names it by that path;
+[`docs/examples/pam.d/sudo_local`](docs/examples/pam.d/sudo_local) is the
+stanza for `sudo` on a Mac.
 
 `tests/dist-target.sh` prints which of those the machine you are on wants.
 
 Releases are signed when the repository holds the keys: the deb and rpm
 packages and `SHA256SUMS` with an OpenPGP key, the apk with the RSA key
-Alpine expects, both public halves attached to the release. To verify a
-download:
+Alpine expects, both public halves attached to the release; the macOS
+package with a Developer ID Installer certificate, notarized by Apple and
+the ticket stapled on. To verify a download:
 
 ```console
 $ gpg --import pam-ssoossh-release-key.asc
 $ gpg --verify SHA256SUMS.asc SHA256SUMS
 $ sha256sum -c SHA256SUMS --ignore-missing
 $ gh attestation verify pam_ssoossh-v1.2.0-linux-x86_64-glibc-openssl3.tar.gz -R <owner>/<repo>
+$ spctl --assess --type install -v pam_ssoossh-v1.2.0-macos15-aarch64.pkg    # on a Mac
 ```
 
 [`packaging/README.md`](packaging/README.md) has the key setup, the secret

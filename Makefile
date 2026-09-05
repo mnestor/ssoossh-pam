@@ -7,8 +7,9 @@
 #   FreeBSD              OpenPAM,    OpenSSL in base,       ELF version script
 #   macOS                OpenPAM,    Security.framework,    ld64 symbol list
 #
-# macOS is a developer and CI target only; it never ships an artifact, and
-# console mode is not compiled into it.
+# macOS ships as a signed installer package (packaging/macos.sh), arm64
+# only, that puts the module under /usr/local/lib/pam. Console mode is not
+# compiled into it.
 
 UNAME  := $(shell uname -s)
 ARCH   := $(shell uname -m)
@@ -25,18 +26,20 @@ ARCH   := $(shell uname -m)
 #   make install SECURITYDIR=/lib/security     to override
 #
 # Nothing matches on macOS, which is deliberate -- /usr/lib/pam is protected
-# by System Integrity Protection and a pam.d entry there takes an absolute
-# path to the build directory instead. tests/e2e.sh detects the empty answer
-# and uses that form. See docs/porting.md.
+# by System Integrity Protection, so a pam.d entry there names the module
+# by absolute path, and tests/e2e.sh detects the empty answer and uses the
+# build directory. The installer package (packaging/macos.sh) is how the
+# module reaches a Mac, at /usr/local/lib/pam. See docs/porting.md.
 ifeq ($(UNAME),Darwin)
   # Deliberately empty. /usr/lib/pam is protected by System Integrity
-  # Protection, so there is nowhere to install; a pam.d entry takes an
-  # absolute path to the build directory instead, and tests/e2e.sh uses that
-  # form when this is blank.
+  # Protection, so OpenPAM's own directory is off limits; a pam.d entry
+  # takes an absolute path instead -- the build directory under
+  # tests/e2e.sh, /usr/local/lib/pam once the package is installed.
   #
   # Stated rather than searched for, so that a stray /usr/local/lib/security
   # left by some other package cannot become an install target that nothing
-  # ever loads from.
+  # ever loads from. `make install SECURITYDIR=/usr/local/lib/pam` is the
+  # by-hand equivalent of the package.
   SECURITYDIR ?=
 else ifeq ($(UNAME),FreeBSD)
   # FreeBSD is the other exception: OpenPAM has no security/ subdirectory at
@@ -95,8 +98,9 @@ VENDOR  :=
 ifeq ($(UNAME),Darwin)
   SRC    += src/crypto_darwin.c
 else
-  # Console mode, and so the QR encoder, are Linux and FreeBSD only: macOS
-  # ships no artifact, so a console login there is scope with no user.
+  # Console mode, and so the QR encoder, are Linux and FreeBSD only: a
+  # Mac's console login is loginwindow, which never shows a PAM message,
+  # so a console flow there is scope with no user.
   SRC    += src/crypto_openssl.c src/qr.c
   VENDOR += third_party/qrcodegen/qrcodegen.c
 endif
@@ -127,7 +131,12 @@ ifeq ($(UNAME),Darwin)
   MINVER  ?= 15.0
   CFLAGS  += -mmacosx-version-min=$(MINVER)
   LDFLAGS += -mmacosx-version-min=$(MINVER)
+  # Apple's strip refuses a bundle outright ("symbols referenced by indirect
+  # symbol table entries"); -x drops the local symbols, which is what
+  # there is to drop, and leaves the two exports alone.
+  STRIP   := strip -x
 else
+  STRIP   := strip --strip-unneeded
   LDFLAGS += -shared -Wl,--no-undefined \
              -Wl,-z,relro,-z,now -Wl,-z,noexecstack \
              -Wl,--version-script=pam_ssoossh.map
@@ -264,7 +273,7 @@ check-stdio:
 SIZE_LIMIT ?= 524288
 
 check-size: $(MODULE)
-	@cp $(MODULE) $(BUILD)/stripped.so && strip $(BUILD)/stripped.so; \
+	@cp $(MODULE) $(BUILD)/stripped.so && $(STRIP) $(BUILD)/stripped.so; \
 	size=$$(wc -c < $(BUILD)/stripped.so); \
 	echo "check-size: $$size bytes stripped (limit $(SIZE_LIMIT))"; \
 	if [ "$$size" -gt "$(SIZE_LIMIT)" ]; then \
@@ -446,6 +455,10 @@ plan-serve:
 #
 #   make dist                                    dist/pam_ssoossh-<version>-<target>.tar.gz
 #   make dist DIST_TARGET=linux-x86_64-musl      name it for the workflow's matrix entry
+#
+# On macOS, stripping invalidates the ad-hoc signature the linker wrote,
+# and an arm64 Mac loads no code without one, so it is re-signed ad hoc
+# here; packaging/macos.sh replaces that with the Developer ID signature.
 DIST        := dist
 DIST_TARGET ?= $(shell tests/dist-target.sh)
 DIST_NAME   := pam_ssoossh-$(VERSION)-$(DIST_TARGET)
@@ -456,7 +469,8 @@ dist: unsanitised
 	stage=$(BUILD)/$(DIST_NAME); \
 	rm -rf "$$stage"; mkdir -p "$$stage" $(DIST); \
 	cp $(MODULE) "$$stage/pam_ssoossh.so"; \
-	strip --strip-unneeded "$$stage/pam_ssoossh.so" 2>/dev/null || strip "$$stage/pam_ssoossh.so"; \
+	$(STRIP) "$$stage/pam_ssoossh.so" 2>/dev/null || strip "$$stage/pam_ssoossh.so"; \
+	if [ "$(UNAME)" = "Darwin" ]; then codesign -s - -f "$$stage/pam_ssoossh.so" 2>/dev/null; fi; \
 	cp LICENSE "$$stage/"; \
 	mkdir -p "$$stage/man" "$$stage/examples"; \
 	cp docs/*.8 docs/*.5 "$$stage/man/"; \
@@ -485,6 +499,9 @@ dist: unsanitised
 # deb, rpm and apk from that tarball, through nfpm and packaging/package.sh,
 # which decides the formats and dependencies from the target name. Needs
 # nfpm: https://github.com/goreleaser/nfpm/releases, or NFPM=/path/to/it.
+# On macOS the same entry point builds the installer package instead,
+# with Apple's own tools -- see packaging/macos.sh for the signing
+# variables it reads.
 NFPM ?= nfpm
 
 packages: dist
@@ -540,7 +557,7 @@ help:
 	@echo "make check-apple-spi"
 	@echo "                macOS: assert Apple still exports the Ed25519 SPI, and it works"
 	@echo "make dist       package a release artifact under dist/ (see tests/dist-target.sh)"
-	@echo "make packages   deb, rpm and apk from that artifact, with nfpm (see packaging/)"
+	@echo "make packages   deb, rpm and apk from that artifact with nfpm; a .pkg on macOS (see packaging/)"
 	@echo "make install    install into $(if $(SECURITYDIR),$(SECURITYDIR),<no PAM module dir found>)"
 	@echo ""
 	@echo "VERSION=$(VERSION)"

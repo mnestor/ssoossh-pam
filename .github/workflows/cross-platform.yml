@@ -91,12 +91,13 @@ jobs:
             gmake tests/pamtest
             sudo gmake e2e
 
-  # Developer and CI target only: it ships no artifact and console mode is
-  # not compiled into it. It exists to keep the OpenPAM paths, the ld64
-  # symbol list, and the Security.framework backend under test.
+  # Ships as a signed installer package from release.yml, which runs these
+  # same gates on the same image before packaging. This job is the place
+  # to run them without cutting a release. Console mode is not compiled
+  # into the macOS build.
   #
-  # src/crypto_darwin.c is the file this job exists for. It has never been
-  # compiled, so expect the first run to fail in it.
+  # src/crypto_darwin.c is the file this job exists for; it has been built
+  # and exercised by hand on Apple silicon, not yet on a hosted runner.
   macos:
     name: macos (sequoia, arm64)
     if: ${{ inputs.job == 'both' || inputs.job == 'macos' }}

@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font: 13px -apple-system, "Helvetica Neue", sans-serif; margin: 1em; }
+  code, pre { font: 12px Menlo, monospace; }
+  pre { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<p><b>What is installed</b></p>
+<pre>/usr/local/lib/pam/pam_ssoossh.so
+/usr/local/share/man/man8/pam_ssoossh.8
+/usr/local/share/man/man5/pam_ssoossh-ca.5, pam_ssoossh-principals.5
+/usr/local/share/doc/pam_ssoossh/     BUILDINFO, LICENSE, examples/</pre>
+
+<p>The module lives under <code>/usr/local</code> because <code>/usr/lib/pam</code>,
+where macOS keeps its own modules, is protected by System Integrity
+Protection. A <code>pam.d</code> line therefore names it by absolute path.</p>
+
+<p><b>Enabling it for sudo</b></p>
+
+<p>macOS reads <code>/etc/pam.d/sudo_local</code> from <code>sudo</code> and
+leaves that file alone across OS updates. Create it from Apple's template if
+it does not exist, then add the module above the Touch ID line:</p>
+
+<pre>sudo cp /etc/pam.d/sudo_local.template /etc/pam.d/sudo_local
+
+auth  sufficient  /usr/local/lib/pam/pam_ssoossh.so server=https://ssoossh.example.com trusted-ca-file=/etc/ssoossh/ca.pub ssh-only
+auth  sufficient  pam_tid.so</pre>
+
+<p>With <code>ssh-only</code>, someone at the keyboard keeps Touch ID and
+someone who arrived over SSH gets the browser flow. Keep a second root shell
+open while you test. <code>man pam_ssoossh</code> describes every option;
+<code>/usr/local/share/doc/pam_ssoossh/examples/pam.d/sudo_local</code> is
+this stanza with its reasoning.</p>
+
+<p><b>Removing it</b></p>
+
+<p>Delete the <code>pam.d</code> line first, then the files listed above, and
+forget the receipt with
+<code>sudo pkgutil --forget @IDENTIFIER@</code>.</p>
+</body>
+</html>

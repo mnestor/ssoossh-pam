@@ -6,6 +6,9 @@
 #   linux-*-glibc-openssl3     deb (Debian 12+, Ubuntu 22.04+) and rpm (EL 9+)
 #   linux-*-glibc-openssl1.1   rpm (EL 8)
 #   linux-*-musl               apk (Alpine)
+#   macos*                     pkg, through macos.sh -- on a Mac only, since
+#                              the tools that build and sign one exist
+#                              nowhere else
 #   anything else              nothing, and says so
 #
 #   packaging/package.sh dist/pam_ssoossh-v1.2.0-linux-x86_64-glibc-openssl3.tar.gz [outdir]
@@ -36,16 +39,11 @@ PKG_HOMEPAGE=${PKG_HOMEPAGE:-https://github.com/mnestor/ssoossh}
 PKG_GPG_KEY_FILE=${PKG_GPG_KEY_FILE:-}
 PKG_APK_KEY_FILE=${PKG_APK_KEY_FILE:-}
 here=$(cd "$(dirname "$0")" && pwd)
-
-command -v "$NFPM" >/dev/null || {
-    echo "package: nfpm not found; install it or set NFPM=/path/to/nfpm" >&2
-    exit 1
-}
+. "$here/version.sh"
 
 stage=$(mktemp -d "${TMPDIR:-/tmp}/pam_ssoossh-pkg.XXXXXX")
 trap 'rm -rf "$stage"' EXIT
 tar -C "$stage" --strip-components=1 -xzf "$tarball"
-gzip -9n "$stage"/man/*.[58]
 
 field() {
     sed -n "s/^$1:[[:space:]]*//p" "$stage/BUILDINFO" | head -1
@@ -57,27 +55,6 @@ if [ -z "$describe" ] || [ -z "$target" ]; then
     exit 1
 fi
 
-# `git describe` into what package formats accept. A tag is the version;
-# what follows it becomes the pre-release, which nfpm spells per format
-# (1.2.0~rc1 for deb and rpm, 1.2.0_rc1 for apk) and which sorts before
-# the release proper. A build with no tag at all is 0.0.0 plus the commit,
-# so it can never outrank a real release on a host.
-case $describe in
-v[0-9]*.[0-9]*.[0-9]*-*)
-    PKG_VERSION=${describe#v}
-    PKG_VERSION=${PKG_VERSION%%-*}
-    PKG_PRERELEASE=$(printf '%s' "${describe#v*-}" | tr -- '-' '.')
-    ;;
-v[0-9]*.[0-9]*.[0-9]*)
-    PKG_VERSION=${describe#v}
-    PKG_PRERELEASE=
-    ;;
-*)
-    PKG_VERSION=0.0.0
-    PKG_PRERELEASE=$(printf 'dev.%s' "$describe" | tr -- '-' '.')
-    ;;
-esac
-
 case $target in
 linux-x86_64-*)
     PKG_ARCH=amd64
@@ -87,11 +64,32 @@ linux-aarch64-*)
     PKG_ARCH=arm64
     multiarch=aarch64-linux-gnu
     ;;
+macos*)
+    # The installer package needs pkgbuild, productbuild and codesign,
+    # which only a Mac has. The release workflow builds it in its macOS
+    # job; on the Linux runner that merges the release, this is a no-op.
+    if [ "$(uname -s)" = Darwin ]; then
+        # Not exec: the trap above still has this script's staging to
+        # remove. macos.sh unpacks the tarball again for itself.
+        "$here/macos.sh" "$tarball" "$outdir"
+        exit 0
+    fi
+    echo "package: $target is packaged on macOS (packaging/macos.sh); nothing to do here"
+    exit 0
+    ;;
 *)
     echo "package: $target is not a Linux target; no packages to build"
     exit 0
     ;;
 esac
+
+command -v "$NFPM" >/dev/null || {
+    echo "package: nfpm not found; install it or set NFPM=/path/to/nfpm" >&2
+    exit 1
+}
+
+gzip -9n "$stage"/man/*.[58]
+pkg_version "$describe"
 
 case $target in
 *-glibc-openssl3)
