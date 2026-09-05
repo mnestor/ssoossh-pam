@@ -88,13 +88,10 @@ Linux packages:
   $ gpg --fingerprint release@example.org                  # -> README
   ```
 
-- **A bare RSA key** signs the apk: Alpine's `apk` verifies with an RSA
-  public key installed under `/etc/apk/keys/<name>`, not with OpenPGP.
-
-  ```console
-  $ openssl genrsa -out apk-private.pem 4096                # -> RELEASE_APK_PRIVATE_KEY
-  $ openssl rsa -in apk-private.pem -pubout -out pam-ssoossh.rsa.pub
-  ```
+  `RELEASE_GPG_PRIVATE_KEY` is also what the workflow hands nfpm to sign
+  the apk. Alpine's `apk` verifies against a public key installed under
+  `/etc/apk/keys/<name>` rather than an OpenPGP keyring, so the public
+  half is published separately.
 
   The public key's filename is what `apk` matches the signature against.
   `nfpm.yaml` fixes it as `pam-ssoossh`, so a host installs the public half
@@ -106,7 +103,6 @@ Repository secrets the release workflow reads:
 | --- | --- |
 | `RELEASE_GPG_PRIVATE_KEY` | the armored OpenPGP private key |
 | `RELEASE_GPG_PASSPHRASE` | its passphrase, if it has one |
-| `RELEASE_APK_PRIVATE_KEY` | the RSA private key, PEM |
 
 All optional. A release without them is unsigned and the job log says so.
 Both public keys are attached to every release, as
