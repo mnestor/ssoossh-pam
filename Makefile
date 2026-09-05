@@ -224,11 +224,17 @@ check-symbols: $(MODULE)
 
 # Needs a real pam.d stack, so it needs root -- see tests/README.md.
 # PAMTEST_LIBS is -lpam_misc on Linux-PAM and empty on OpenPAM.
+#
+# -std=c11 defines __STRICT_ANSI__, which hides the POSIX signal API the
+# driver uses to block SIGINT the way sudo does -- sigset_t and
+# sigprocmask are undeclared without a feature macro, on glibc and musl
+# alike. _POSIX_C_SOURCE rather than the module's _GNU_SOURCE: this file
+# is built on FreeBSD and macOS too and wants nothing glibc-specific.
 PAMTEST_LIBS ?= $(if $(filter Linux,$(UNAME)),-lpam_misc,)
 
 tests/pamtest: tests/pamtest.c
-	$(CC) -std=c11 -O1 -Wall -Wextra $(SANCFLAGS) $(SANLDFLAGS) \
-	    -o $@ $< -lpam $(PAMTEST_LIBS)
+	$(CC) -std=c11 -O1 -Wall -Wextra -D_POSIX_C_SOURCE=200809L \
+	    $(SANCFLAGS) $(SANLDFLAGS) -o $@ $< -lpam $(PAMTEST_LIBS)
 
 # Runs anywhere, including CI: proves the module loads and that exactly the
 # right symbols are reachable through the dynamic loader.
