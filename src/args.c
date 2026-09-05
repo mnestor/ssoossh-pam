@@ -466,6 +466,8 @@ ssoossh_args_status ssoossh_args_parse(int argc, const char **argv,
             (void)ssoossh_duration_parse(value, &cfg->timeout);
         } else if (strcmp(key, "insecure-skip-verify") == 0) {
             (void)parse_bool(value, &cfg->insecure_skip_verify);
+        } else if (strcmp(key, "ssh-only") == 0) {
+            (void)parse_bool(value, &cfg->ssh_only);
         } else if (strcmp(key, "debug") == 0) {
             /* Three-state in the Go module: absent or "false" is off, and
              * anything else -- including the legacy "stdout" -- means log.

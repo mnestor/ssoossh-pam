@@ -72,6 +72,13 @@ typedef struct {
     bool insecure_skip_verify;
     bool debug;
 
+    /* Stand aside -- PAM_IGNORE, before any network -- unless the session
+     * arrived over SSH. For a host whose local logins have a factor a
+     * remote login cannot use: a Mac with Touch ID, a workstation with a
+     * smartcard reader. Orthogonal to mode, which still decides how an
+     * approval is presented when the module does take part. */
+    bool ssh_only;
+
     ssoossh_mode mode;
 } ssoossh_config;
 

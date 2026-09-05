@@ -131,6 +131,7 @@ int suite_args(void)
     T_EQ_INT(cfg.skew_tolerance, SSOOSSH_DEFAULT_SKEW_TOLERANCE);
     T_EQ_INT(cfg.timeout, SSOOSSH_DEFAULT_TIMEOUT);
     T_CHECK(!cfg.insecure_skip_verify);
+    T_CHECK(!cfg.ssh_only);
     T_CHECK(!cfg.debug);
     T_EQ_INT(cfg.mode, SSOOSSH_MODE_AUTO);
 
@@ -163,6 +164,17 @@ int suite_args(void)
 
     T_EQ_INT(parse(&cfg, ARGS("insecure-skip-verify=false")), SSOOSSH_ARGS_OK);
     T_CHECK(!cfg.insecure_skip_verify);
+
+    /* ssh-only is the same shape of flag, and independent of mode. */
+    T_EQ_INT(parse(&cfg, ARGS("ssh-only")), SSOOSSH_ARGS_OK);
+    T_CHECK(cfg.ssh_only);
+    T_EQ_INT(cfg.mode, SSOOSSH_MODE_AUTO);
+    T_EQ_INT(parse(&cfg, ARGS("ssh-only=false", "mode=sudo")), SSOOSSH_ARGS_OK);
+    T_CHECK(!cfg.ssh_only);
+    T_EQ_INT(cfg.mode, SSOOSSH_MODE_SUDO);
+    T_EQ_INT(parse(&cfg, ARGS("ssh-only=true", "mode=sudo")), SSOOSSH_ARGS_OK);
+    T_CHECK(cfg.ssh_only);
+    T_EQ_INT(cfg.mode, SSOOSSH_MODE_SUDO);
 
     /* An unparseable bool leaves the safe default rather than failing. */
     T_EQ_INT(parse(&cfg, ARGS("insecure-skip-verify=maybe")), SSOOSSH_ARGS_OK);

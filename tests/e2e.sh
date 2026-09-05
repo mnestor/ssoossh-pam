@@ -206,6 +206,7 @@ next_port() {
 
 failures=0
 LAST_OUT=""
+pamtest_env=""
 
 # Reads back the module's syslog output, waiting up to two seconds for the
 # line a caller is looking for to land.
@@ -255,7 +256,11 @@ run() {
         return
     fi
 
-    out="$("$repo/tests/pamtest" "$service" 2>&1)" && rc=0 || rc=$?
+    # pamtest_env: extra words for env(1) in front of pamtest -- a variable
+    # to set, or -u NAME to clear one -- for a scenario that depends on the
+    # environment the module sees. Unquoted on purpose: it is a word list.
+    # shellcheck disable=SC2086
+    out="$(env $pamtest_env "$repo/tests/pamtest" "$service" 2>&1)" && rc=0 || rc=$?
     stop_stub
     # Kept for a caller that wants to assert on what reached the terminal
     # rather than on what reached syslog.
@@ -360,7 +365,7 @@ if [ ${#scenarios[@]} -eq 0 ]; then
                enrolled drop error-500 error-404 bad-json create-500 escape
                wrong-key untrusted expired-cert wrong-principal
                principals-map slow console cancel-requisite
-               cancel-bracketed)
+               cancel-bracketed ssh-only-local ssh-only-remote)
 fi
 
 for s in "${scenarios[@]}"; do
@@ -471,6 +476,29 @@ for s in "${scenarios[@]}"; do
         else
             run console console 0 'console flow' 15s 'mode=console'
         fi ;;
+    ssh-only-local)
+        # A login that did not arrive over SSH: the module stands aside
+        # with PAM_IGNORE before any network, pam_permit follows, and the
+        # stack says Success without a request ever being created. The
+        # SSH variables are cleared so the harness's own session does not
+        # leak in -- but a harness itself run over SSH has an sshd
+        # ancestor the module will find regardless, so the case is
+        # skipped there rather than reported as a module bug.
+        if [ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
+            skip ssh-only-local 'this harness is itself running over SSH'
+        else
+            pamtest_env="-u SSH_CONNECTION -u SSH_CLIENT -u SSH_TTY"
+            run ssh-only-local slow 0 'standing aside' 15s 'ssh-only' --hold 60
+            pamtest_env=""
+        fi ;;
+    ssh-only-remote)
+        # The same line, in a session that did arrive over SSH: the flow
+        # runs as if ssh-only were not there. SSH_TTY rather than
+        # SSH_CONNECTION only because pamtest_env is a word list and
+        # SSH_CONNECTION's value has spaces in it.
+        pamtest_env="SSH_TTY=/dev/pts/9"
+        run ssh-only-remote approved 0 'successful authentication' 15s 'ssh-only'
+        pamtest_env="" ;;
     cancel-requisite)
         run_cancel requisite cancel-requisite ;;
     cancel-bracketed)

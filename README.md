@@ -86,6 +86,7 @@ Every argument, every return code and the principals-map grammar are in
 | `skew-tolerance` | `2s` | applied to both ends of the validity window |
 | `timeout` | `60s` | bounds the whole attempt |
 | `insecure-skip-verify` | off | skips TLS verification; logs a warning when used |
+| `ssh-only` | off | stands aside (`PAM_IGNORE`) unless the session arrived over SSH, so a local login keeps its password, smartcard or Touch ID |
 | `debug` | off | logs each check's decision |
 
 Durations use Go's `time.ParseDuration` grammar — `2s`, `500ms`, `1h30m` —

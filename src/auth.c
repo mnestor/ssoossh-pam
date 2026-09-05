@@ -34,6 +34,7 @@
 #include "log.h"
 #include "sse.h"
 #include "sshcert.h"
+#include "sshdetect.h"
 #include "sshkey.h"
 #ifndef __APPLE__
 #    include "qr.h"
@@ -446,12 +447,14 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
 
     ssoossh_debugf(
         "args: server=%s trusted-ca-file=%s principals-map=%s "
-        "skew-tolerance=%s timeout=%s insecure-skip-verify=%s mode=%s",
+        "skew-tolerance=%s timeout=%s insecure-skip-verify=%s ssh-only=%s "
+        "mode=%s",
         cfg->server, cfg->trusted_ca_file,
         cfg->principals_map[0] != '\0' ? cfg->principals_map : "(unset)",
         ssoossh_duration_string(cfg->skew_tolerance, skew, sizeof(skew)),
         ssoossh_duration_string(cfg->timeout, timeout, sizeof(timeout)),
-        cfg->insecure_skip_verify ? "true" : "false", mode_name(cfg->mode));
+        cfg->insecure_skip_verify ? "true" : "false",
+        cfg->ssh_only ? "true" : "false", mode_name(cfg->mode));
 
     if (cfg->insecure_skip_verify) {
         /* Loud, and at warning rather than debug. With this on, nothing the
@@ -481,6 +484,20 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
     }
     ssoossh_debugf("loaded %zu trusted CA key(s) from %s (%zu skipped)",
                    a->cas.count, cfg->trusted_ca_file, a->cas.skipped);
+
+    /* After the configuration checks, so a broken pam.d line is reported
+     * on a local login too, and before the keypair and the network, so a
+     * local login costs neither. PAM_IGNORE is the Ctrl-C answer for the
+     * same reason: this module has nothing to say about this login, and
+     * the stack should hear from whatever follows -- the password,
+     * smartcard or Touch ID entry that a local session can satisfy. */
+    if (cfg->ssh_only && !ssoossh_ssh_session()) {
+        ssoossh_infof("ssh-only is set and this session did not arrive over "
+                      "SSH; standing aside for %s",
+                      user);
+        rc = PAM_IGNORE;
+        goto done;
+    }
 
     ssoossh_context_read(pamh, &ctx);
 

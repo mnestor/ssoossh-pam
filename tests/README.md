@@ -146,6 +146,7 @@ syslog line is what distinguishes them.
 | `slow` | the module's own timeout ends the wait |
 | `console` | the console flow, code and QR |
 | `cancel-requisite`, `cancel-bracketed` | Ctrl-C falls through to the next module |
+| `ssh-only-local`, `ssh-only-remote` | with `ssh-only`, a login that did not arrive over SSH stands aside before any network (`PAM_IGNORE`), and one that did runs the flow as usual |
 
 The two `cancel` scenarios are the ones worth explaining. Ctrl-C makes the
 module return `PAM_IGNORE` — "this module contributes nothing" — so libpam

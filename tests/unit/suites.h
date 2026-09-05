@@ -25,6 +25,7 @@ int suite_checks(void);
 int suite_localaddrs(void);
 int suite_console(void);
 int suite_hostinfo(void);
+int suite_sshdetect(void);
 #ifndef __APPLE__
 int suite_qr(void);
 #endif

@@ -169,6 +169,29 @@ every attempt that uses it. A value that is neither
 is treated as
 .BR false .
 .TP
+.BR ssh\-only [ =true | =false ]
+Default off. Take part only when the session arrived over SSH; for any
+other login the module returns
+.B PAM_IGNORE
+before generating a key or opening a socket, and the stack continues to
+whatever follows it. For a host whose local logins already carry a factor
+a remote login cannot use \(em a Mac with Touch ID, a workstation with a
+smartcard reader \(em so that someone at the keyboard gets that, and
+someone who arrived over
+.BR ssh (1)
+gets the browser flow. A session counts as SSH when
+.BR SSH_CONNECTION ", " SSH_CLIENT " or " SSH_TTY
+is set in the environment, or when an
+.B sshd
+process is this process or one of its ancestors; the first survives
+.BR tmux (1)
+and
+.BR screen (1),
+the second survives a scrubbed environment. This chooses which factor to
+ask for; it is not a security boundary, and every branch of it still
+authenticates. Independent of
+.BR mode .
+.TP
 .BI mode= auto | sudo | console
 Default
 .BR auto ,
@@ -259,7 +282,9 @@ could not issue, the certificate did not parse, or a check failed. Also a
 timeout.
 .TP
 .B PAM_IGNORE
-The person pressed Ctrl\-C at the approval prompt. The module contributes
+The person pressed Ctrl\-C at the approval prompt, or
+.B ssh\-only
+is set and the session did not arrive over SSH. The module contributes
 nothing and the stack continues to whatever follows it.
 .TP
 .B PAM_AUTHINFO_UNAVAIL
