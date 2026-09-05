@@ -12,14 +12,17 @@ name: Release
 # `make dist`, tests/dist-target.sh and packaging/, so this file is only a
 # matrix, an upload, a download, a loop and a `gh release create`.
 #
-# The artifact names carry what decides whether the module will load on a
-# host, because it links the host's libraries rather than shipping them:
+# Every artifact is named <package>_<version>_<os>_<arch>, the version
+# without its leading v. The os field carries what decides whether the
+# module will load on a host, because it links the host's libraries rather
+# than shipping them:
 #
-#   linux-x86_64-glibc-openssl3     RHEL 9+, Debian 12+, Ubuntu 22.04+ ...
-#   linux-x86_64-glibc-openssl1.1   RHEL 8 and its rebuilds
-#   linux-x86_64-musl               Alpine
-#   freebsd14-x86_64                FreeBSD 14
-#   macos15-aarch64                 macOS 15 and later, Apple silicon
+#   linux-glibc-openssl3_x86_64     RHEL 9+, Debian 12+, Ubuntu 22.04+ ...
+#   linux-glibc-openssl1.1_x86_64   RHEL 8 and its rebuilds
+#   linux-musl_x86_64               Alpine
+#   freebsd14_x86_64                FreeBSD 14
+#   darwin_aarch64                  Apple silicon; the deployment floor is
+#                                   in BUILDINFO, not the name
 #
 # and aarch64 for each Linux row. The glibc rows are built on the *oldest*
 # glibc that carries that OpenSSL -- AlmaLinux 9 for OpenSSL 3, AlmaLinux 8
@@ -63,19 +66,19 @@ jobs:
         include:
           # AlmaLinux rather than ubi: pam-devel is not in the unentitled
           # UBI repositories. Same ABI, same versions -- see ci.yml.
-          - target: linux-x86_64-glibc-openssl3
+          - target: linux-glibc-openssl3_x86_64
             runner: ubuntu-latest
             container: almalinux:9
             family: el
-          - target: linux-aarch64-glibc-openssl3
+          - target: linux-glibc-openssl3_aarch64
             runner: ubuntu-24.04-arm
             container: almalinux:9
             family: el
-          - target: linux-x86_64-glibc-openssl1.1
+          - target: linux-glibc-openssl1.1_x86_64
             runner: ubuntu-latest
             container: almalinux:8
             family: el
-          - target: linux-aarch64-glibc-openssl1.1
+          - target: linux-glibc-openssl1.1_aarch64
             runner: ubuntu-24.04-arm
             container: almalinux:8
             family: el
@@ -144,9 +147,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: linux-x86_64-musl
+          - target: linux-musl_x86_64
             runner: ubuntu-latest
-          - target: linux-aarch64-musl
+          - target: linux-musl_aarch64
             runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -186,7 +189,7 @@ jobs:
   # No hosted FreeBSD image exists; a VM on the Linux runner, as in
   # cross-platform.yml. Slower, but it is the OpenPAM platform that ships.
   freebsd:
-    name: freebsd14-x86_64
+    name: freebsd14_x86_64
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -213,7 +216,7 @@ jobs:
             sudo pkg install -y gmake pkgconf curl bash python3
             got=$(tests/dist-target.sh)
             echo "image reports: $got"
-            test "$got" = freebsd14-x86_64
+            test "$got" = freebsd14_x86_64
             gmake
             gmake test
             gmake check-stdio
@@ -225,21 +228,23 @@ jobs:
             # cross-platform.yml does.
             sudo hostname freebsd-ci
             sudo gmake e2e
-            gmake dist DIST_TARGET=freebsd14-x86_64
+            gmake dist DIST_TARGET=freebsd14_x86_64
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dist-freebsd14-x86_64
+          name: dist-freebsd14_x86_64
           path: dist/*.tar.gz
           if-no-files-found: error
           retention-days: 7
 
   # A hosted Mac, Apple silicon only: Apple's Intel line is at end of life,
-  # and the bundle links nothing that would want a second slice. The
-  # target name carries the deployment floor rather than the runner's
-  # release, so this stays macos15-aarch64 when the runner label moves.
+  # and the bundle links nothing that would want a second slice. The name
+  # carries neither the runner's release nor the deployment floor, so it
+  # stays darwin_aarch64 when either moves; `make dist` records the floor
+  # in BUILDINFO, which is where packaging/macos.sh reads it to set the
+  # installer's refusal on an older Mac.
   #
-  # It moved: macOS 26, building for a floor of 15 with
+  # The runner has moved: macOS 26, building for a floor of 15 with
   # -mmacosx-version-min. The signing identities are exported from Keychain
   # Access on a macOS 26 Mac, and macOS 15 cannot read the PKCS#12 that
   # writes -- PBES2, AES-256-CBC, SHA-256 MAC -- so every rotation of those
@@ -256,7 +261,7 @@ jobs:
   # the package is built unsigned and the log says so, as with the GPG and
   # apk keys in the release job.
   macos:
-    name: macos15-aarch64
+    name: darwin_aarch64
     runs-on: macos-26
     timeout-minutes: 45
     env:
@@ -271,7 +276,7 @@ jobs:
           sw_vers
           got=$(tests/dist-target.sh)
           echo "image reports: $got"
-          test "$got" = macos15-aarch64
+          test "$got" = darwin_aarch64
 
       # The Ed25519 SPI the Darwin backend resolves at runtime, in this
       # SDK's export list before anything is built -- see apple-drift.yml.
@@ -302,7 +307,7 @@ jobs:
           sudo make e2e
 
       - name: Package
-        run: make dist DIST_TARGET=macos15-aarch64
+        run: make dist DIST_TARGET=darwin_aarch64
 
       # Only when the token is set, so a fork without it still gets its
       # (unsigned) package. The step's outputs are empty when it is
@@ -342,7 +347,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dist-macos15-aarch64
+          name: dist-darwin_aarch64
           path: |
             dist/*.tar.gz
             dist/*.pkg

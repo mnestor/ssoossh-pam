@@ -336,13 +336,23 @@ also wrapped as distribution packages by [nfpm](https://nfpm.goreleaser.com)
 looks and declare the sonames it needs, and the macOS one as an installer
 package built with Apple's own tools:
 
+Every artifact is named `<package>_<version>_<os>_<arch>`, the version
+without its leading `v` — `pam-ssoossh_1.2.0_linux-glibc-openssl3_x86_64.rpm`.
+The `<os>` field is what decides whether the module will load:
+
 | artifact | for | package |
 | --- | --- | --- |
-| `linux-{x86_64,aarch64}-glibc-openssl3` | RHEL 9 and rebuilds, Debian 12+, Ubuntu 22.04+, anything with `libcrypto.so.3` | `.deb`, `.rpm` |
-| `linux-{x86_64,aarch64}-glibc-openssl1.1` | RHEL 8 and rebuilds, anything with `libcrypto.so.1.1` | `.rpm` |
-| `linux-{x86_64,aarch64}-musl` | Alpine | `.apk` |
-| `freebsd14-x86_64` | FreeBSD 14 | tarball only |
-| `macos15-aarch64` | macOS 15 and later on Apple silicon | `.pkg`, Developer ID signed and notarized |
+| `linux-glibc-openssl3_{x86_64,aarch64}` | RHEL 9 and rebuilds, Debian 12+, Ubuntu 22.04+, anything with `libcrypto.so.3` | `.deb`, `.rpm` |
+| `linux-glibc-openssl1.1_{x86_64,aarch64}` | RHEL 8 and rebuilds, anything with `libcrypto.so.1.1` | `.rpm` |
+| `linux-musl_{x86_64,aarch64}` | Alpine | `.apk` |
+| `freebsd14_x86_64` | FreeBSD 14 | tarball only |
+| `darwin_aarch64` | macOS 15 and later on Apple silicon | `.pkg`, Developer ID signed and notarized |
+
+The `.deb` files spell the architecture Debian's way — `amd64`, `arm64` —
+since that is what its own tooling expects to read there and what the
+package declares inside. The macOS deployment floor is in the tarball's
+`BUILDINFO` rather than the name, so the name does not move when the floor
+does; the installer refuses an older Mac itself.
 
 The packages install nothing into `/etc/pam.d`; wiring the module into a
 service stanza stays an operator's decision, as
@@ -366,8 +376,8 @@ the ticket stapled on. To verify a download:
 $ gpg --import pam-ssoossh-release-key.asc
 $ gpg --verify SHA256SUMS.asc SHA256SUMS
 $ sha256sum -c SHA256SUMS --ignore-missing
-$ gh attestation verify pam_ssoossh-v1.2.0-linux-x86_64-glibc-openssl3.tar.gz -R <owner>/<repo>
-$ spctl --assess --type install -v pam_ssoossh-v1.2.0-macos15-aarch64.pkg    # on a Mac
+$ gh attestation verify pam-ssoossh_1.2.0_linux-glibc-openssl3_x86_64.tar.gz -R <owner>/<repo>
+$ spctl --assess --type install -v pam-ssoossh_1.2.0_darwin_aarch64.pkg    # on a Mac
 ```
 
 [`packaging/README.md`](packaging/README.md) has the key setup, the secret

@@ -494,15 +494,20 @@ plan-serve:
 # platform; the release workflow passes DIST_TARGET explicitly and asserts
 # the two agree.
 #
-#   make dist                                    dist/pam_ssoossh-<version>-<target>.tar.gz
-#   make dist DIST_TARGET=linux-x86_64-musl      name it for the workflow's matrix entry
+#   make dist                                dist/pam-ssoossh_<version>_<target>.tar.gz
+#   make dist DIST_TARGET=linux-musl_x86_64  name it for the workflow's matrix entry
+#
+# The name is <package>_<version>_<os>_<arch>, the version without its
+# leading v; BUILDINFO keeps `git describe` as it is, since packaging/
+# reads the version from there and needs the tag's own spelling.
 #
 # On macOS, stripping invalidates the ad-hoc signature the linker wrote,
 # and an arm64 Mac loads no code without one, so it is re-signed ad hoc
 # here; packaging/macos.sh replaces that with the Developer ID signature.
-DIST        := dist
-DIST_TARGET ?= $(shell tests/dist-target.sh)
-DIST_NAME   := pam_ssoossh-$(VERSION)-$(DIST_TARGET)
+DIST         := dist
+DIST_TARGET  ?= $(shell tests/dist-target.sh)
+DIST_VERSION := $(VERSION:v%=%)
+DIST_NAME    := pam-ssoossh_$(DIST_VERSION)_$(DIST_TARGET)
 
 dist: unsanitised
 	@$(MAKE) --no-print-directory $(MODULE)
@@ -521,6 +526,7 @@ dist: unsanitised
 	  echo "version:   $(VERSION)"; \
 	  echo "ssoosshd:  $(SSOOSSHD_COMPAT)"; \
 	  echo "target:    $(DIST_TARGET)"; \
+	  $(if $(MINVER),echo "minver:    $(MINVER)";) \
 	  echo "built:     $$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
 	  echo "host:      $$(uname -srm)"; \
 	  echo "compiler:  $$($(CC) --version 2>/dev/null | head -1)"; \

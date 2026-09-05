@@ -314,7 +314,7 @@ That is act's limit, not the workflow's:
 
 ```console
 $ act push -W .github/workflows/release.yml -j linux \
-      --matrix target:linux-x86_64-musl --artifact-server-path build/act-artifacts
+      --matrix target:linux-musl_x86_64 --artifact-server-path build/act-artifacts
 ```
 
 FreeBSD and macOS are in `.github/workflows/cross-platform.yml` behind

@@ -2,7 +2,7 @@
 # Wraps one macOS release tarball from `make dist` as an installer package,
 # signed and notarized when the material is in the environment:
 #
-#   packaging/macos.sh dist/pam_ssoossh-v1.2.0-macos15-aarch64.tar.gz [outdir]
+#   packaging/macos.sh dist/pam-ssoossh_1.2.0_darwin_aarch64.tar.gz [outdir]
 #
 # The package installs what `make install` would, in the same places, all
 # of them outside System Integrity Protection:
@@ -96,21 +96,31 @@ if [ -z "$describe" ] || [ -z "$target" ]; then
     exit 1
 fi
 case $target in
-macos[0-9]*-aarch64) ;;
+darwin_aarch64) ;;
 *)
     echo "macos: $target is not an arm64 macOS target" >&2
     exit 1
     ;;
+esac
+# The deployment floor: the -mmacosx-version-min the module was built with,
+# which Distribution.xml turns into the installer's refusal on an older
+# Mac. It used to be readable out of the target name, back when that name
+# was macos15-aarch64; `make dist` records it in BUILDINFO now.
+minver=$(field minver)
+if [ -z "$minver" ]; then
+    echo "macos: $tarball records no minver, so the installer would accept" \
+        "a Mac older than the module was built for" >&2
+    exit 1
+fi
+case $minver in
+*.*) ;;
+*) minver=$minver.0 ;;
 esac
 
 # The receipt's version: 1.2.0, 1.2.0-rc1, 0.0.0-dev.abc1234. The file
 # name carries `git describe` as it is, like every other artifact.
 pkg_version "$describe"
 pkgver=$PKG_VERSION${PKG_PRERELEASE:+-$PKG_PRERELEASE}
-# The OS floor is in the target name, and is the -mmacosx-version-min the
-# module was built with.
-minver=${target#macos}
-minver=${minver%%-*}.0
 name=$(basename "$tarball" .tar.gz)
 mkdir -p "$outdir"
 outdir=$(cd "$outdir" && pwd)

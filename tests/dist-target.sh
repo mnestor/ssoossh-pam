@@ -1,19 +1,23 @@
 #!/bin/sh
 # Names the platform a release artifact was built for, from the machine
-# building it:
+# building it, as the <os>_<arch> half of the artifact name:
 #
-#   linux-x86_64-glibc-openssl3     linux-aarch64-musl
-#   linux-x86_64-glibc-openssl1.1   freebsd14-x86_64
-#   macos15-aarch64
+#   linux-glibc-openssl3_x86_64     linux-musl_aarch64
+#   linux-glibc-openssl1.1_x86_64   freebsd14_x86_64
+#   darwin_aarch64
 #
-# The name carries what decides whether the module will *load* on a host,
-# because it links the host's libraries rather than shipping them: the C
-# library ABI, and on glibc which libcrypto soname it was linked against
-# (musl distributions all carry OpenSSL 3 by now, so the name stays short).
-# FreeBSD carries its major release, since base OpenSSL changes with it.
-# macOS carries the deployment target rather than the building Mac's
-# release: the bundle links only what ships with the OS and is built with
-# -mmacosx-version-min, so it loads on that release and every later one.
+# The os field carries what decides whether the module will *load* on a
+# host, because it links the host's libraries rather than shipping them:
+# the C library ABI, and on glibc which libcrypto soname it was linked
+# against (musl distributions all carry OpenSSL 3 by now, so the name stays
+# short). FreeBSD carries its major release, since base OpenSSL changes
+# with it. macOS carries neither: the bundle links only what ships with the
+# OS, and the deployment floor it was built with is recorded in BUILDINFO
+# rather than in the name, so the name does not move when the floor does.
+#
+# Two artifacts that differ only in this field are different packages --
+# the EL 8 and EL 9 rpms are the case that matters -- so it is what keeps
+# them from overwriting each other on the way into a release.
 #
 # The release workflow compares this against the matrix entry it expected,
 # so a container image that quietly changes what it ships fails the build
@@ -31,7 +35,7 @@ case $os in
 linux)
     if [ -n "$(ls /lib/ld-musl-* 2>/dev/null)" ] ||
         ldd --version 2>&1 | grep -qi musl; then
-        echo "linux-$arch-musl"
+        echo "linux-musl_$arch"
         exit 0
     fi
     version=$(pkg-config --modversion libcrypto 2>/dev/null || true)
@@ -46,21 +50,15 @@ linux)
     else
         crypto="openssl$major"
     fi
-    echo "linux-$arch-glibc-$crypto"
+    echo "linux-glibc-${crypto}_$arch"
     ;;
 freebsd)
-    echo "freebsd$(uname -r | cut -d. -f1)-$arch"
+    echo "freebsd$(uname -r | cut -d. -f1)_$arch"
     ;;
 darwin)
-    # The floor is the Makefile's MINVER, read from the file rather than
-    # asked of make: the Makefile runs this script to name `make dist`, so
-    # running make from here would recurse without end. The running
-    # release only if the Makefile is somehow not beside this script.
-    floor=$(sed -n 's/^ *MINVER *?= *//p' "$(dirname "$0")/../Makefile" 2>/dev/null | head -1)
-    [ -n "$floor" ] || floor=$(sw_vers -productVersion 2>/dev/null)
-    echo "macos${floor%%.*}-$arch"
+    echo "darwin_$arch"
     ;;
 *)
-    echo "$os-$arch"
+    echo "${os}_$arch"
     ;;
 esac

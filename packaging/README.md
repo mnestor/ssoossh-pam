@@ -21,8 +21,8 @@ it.
 
 ```console
 $ make packages                       # from `make dist`; nfpm on Linux, pkgbuild on a Mac
-$ packaging/package.sh dist/pam_ssoossh-v1.2.0-linux-x86_64-glibc-openssl3.tar.gz
-$ packaging/package.sh dist/pam_ssoossh-v1.2.0-macos15-aarch64.tar.gz     # on a Mac
+$ packaging/package.sh dist/pam-ssoossh_1.2.0_linux-glibc-openssl3_x86_64.tar.gz
+$ packaging/package.sh dist/pam-ssoossh_1.2.0_darwin_aarch64.tar.gz     # on a Mac
 ```
 
 ## Which target becomes which package
@@ -199,8 +199,8 @@ $ gpg --import pam-ssoossh-release-key.asc
 $ gpg --verify SHA256SUMS.asc SHA256SUMS
 $ sha256sum -c SHA256SUMS --ignore-missing
 
-$ rpm --import pam-ssoossh-release-key.asc && rpm -K pam-ssoossh-*.rpm
-$ sudo cp pam-ssoossh.rsa.pub /etc/apk/keys/ && sudo apk add ./pam-ssoossh-*.apk
+$ rpm --import pam-ssoossh-release-key.asc && rpm -K pam-ssoossh_*.rpm
+$ sudo cp pam-ssoossh.rsa.pub /etc/apk/keys/ && sudo apk add ./pam-ssoossh_*.apk
 ```
 
 For the deb, `apt` verifies repositories rather than files, so the
@@ -211,13 +211,13 @@ On a Mac, what Gatekeeper will decide, and the signature and the stapled
 notarization ticket behind it:
 
 ```console
-$ spctl --assess --type install -vv pam_ssoossh-*.pkg
-$ pkgutil --check-signature pam_ssoossh-*.pkg
-$ xcrun stapler validate pam_ssoossh-*.pkg
+$ spctl --assess --type install -vv pam-ssoossh_*.pkg
+$ pkgutil --check-signature pam-ssoossh_*.pkg
+$ xcrun stapler validate pam-ssoossh_*.pkg
 ```
 
 And when the repository is public, GitHub's own provenance:
 
 ```console
-$ gh attestation verify pam-ssoossh_1.2.0_amd64.deb -R <owner>/<repo>
+$ gh attestation verify pam-ssoossh_1.2.0_linux-glibc-openssl3_amd64.deb -R <owner>/<repo>
 ```
