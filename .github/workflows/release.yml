@@ -193,10 +193,16 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The VM has no git, so the Makefile's `git describe` fallback would
+      # name this tarball pam_ssoossh-dev-... in a release of everything
+      # else. Resolve the version on the host and hand it over.
+      - run: echo "VERSION=$(git describe --tags --always --dirty)" >>"$GITHUB_ENV"
+
       - uses: cross-platform-actions/action@v0.27.0
         with:
           operating_system: freebsd
           version: "14.2"
+          environment_variables: VERSION
           run: |
             set -ex
             # The image's package set is older than the repo, and pkg is
@@ -517,6 +523,9 @@ jobs:
           shopt -s nullglob
           assets=(dist/*.tar.gz dist/*.deb dist/*.rpm dist/*.apk dist/*.pkg
                   dist/SHA256SUMS* dist/*.asc dist/*.pub)
+          # SHA256SUMS.asc matches two of those patterns, and the upload API
+          # answers a repeated asset name with a 404, so keep one of each path.
+          mapfile -t assets < <(printf '%s\n' "${assets[@]}" | awk 'NF && !seen[$0]++')
           printf 'publishing %s\n' "${assets[@]}"
           # shellcheck disable=SC2086  # $pre is deliberately empty or one flag
           gh release create "$GITHUB_REF_NAME" $pre \
