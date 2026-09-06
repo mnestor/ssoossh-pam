@@ -1,0 +1,52 @@
+# Dependabot configuration.
+#
+# This is a C project with no package manager: libpam, libcrypto and libcurl
+# come from the distro, and third_party/qrcodegen is vendored source. So the
+# only things here with an upstream version to track are the GitHub Actions the
+# workflows call and the devcontainer features the dev image installs.
+#
+# Deliberately not covered:
+#
+#   * .devcontainer/Dockerfile -- its base is pinned to a Debian codename
+#     ("bookworm") on purpose, because that release is one of the four CI
+#     targets. Dependabot cannot order codename tags against each other
+#     anyway, so a docker entry here would find nothing to do and would only
+#     risk moving the image off the toolchain CI actually uses.
+#   * The ACTIONLINT_VERSION / ACT_VERSION build args in that Dockerfile.
+#     They are release-tarball downloads, not a manifest Dependabot reads;
+#     they have to be bumped by hand.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    # "/" is the whole repo for this ecosystem: it covers .github/workflows/
+    # and any composite action in the tree, not just files in the root.
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # One PR a week for everything rather than one per action. The workflows
+    # share actions (checkout and upload-artifact appear in all four), so
+    # separate PRs would mean the same CI matrix -- including the FreeBSD and
+    # macOS legs -- running once per action for no added signal.
+    groups:
+      actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: devcontainers
+    # "/" again, not "/.devcontainer": this updater looks for
+    # .devcontainer/devcontainer.json (and .devcontainer/*/devcontainer.json)
+    # underneath whatever directory it is given, so the repo root finds ours.
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      devcontainer-features:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: build
