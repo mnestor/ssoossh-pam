@@ -44,7 +44,7 @@
     },
     // Node 22+ is required by @agent-native/core, which serves the visual
     // plan over a localhost bridge.
-    "ghcr.io/devcontainers/features/node:1": {
+    "ghcr.io/devcontainers/features/node:2": {
       "version": "22"
     },
     // Matches the monorepo's go.mod (go 1.27). Needed for P6's differential
