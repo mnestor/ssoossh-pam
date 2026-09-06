@@ -5,6 +5,7 @@
  * the signed extent wrong by one byte passes any test written against its
  * own output and fails every one of these.
  */
+#include <stdio.h>
 #include <string.h>
 
 #include "crypto.h"
@@ -212,6 +213,95 @@ int suite_sshcert(void)
         T_EQ_INT(
             ssoossh_cert_parse(truncated_name, sizeof(truncated_name), &cert),
             SSOOSSH_CERT_MALFORMED);
+    }
+
+    /* The line ssoosshd sends is a JSON string carrying the trailing
+     * newline Go's MarshalAuthorizedKey wrote, and a comment field after
+     * the base64 is legal in the same way authorized_keys means it. Both
+     * are the caller's real input, so both parse. */
+    {
+        char line[SSOOSSH_MAX_CERT_LINE], with_tail[SSOOSSH_MAX_CERT_LINE];
+        size_t n =
+            fixture_read_line("cert_ca_ecdsa384.cert", line, sizeof(line));
+        uint8_t blob[SSOOSSH_MAX_CERT];
+
+        if (n > 0 && n + 16 < sizeof(with_tail)) {
+            ssoossh_cert nl;
+            int m = snprintf(with_tail, sizeof(with_tail), "%s\n", line);
+
+            T_CHECK(m > 0);
+            T_CHECK(ssoossh_cert_parse_line(with_tail, (size_t)m, blob,
+                                            sizeof(blob),
+                                            &nl) == SSOOSSH_CERT_OK);
+
+            m = snprintf(with_tail, sizeof(with_tail), "%s me@host\n", line);
+            T_CHECK(m > 0);
+            T_CHECK(ssoossh_cert_parse_line(with_tail, (size_t)m, blob,
+                                            sizeof(blob),
+                                            &nl) == SSOOSSH_CERT_OK);
+
+            /* And the check the delegation buys: a line whose type field
+             * disagrees with the type inside the blob is a certificate
+             * claiming to be an algorithm it is not. */
+            m = snprintf(with_tail, sizeof(with_tail), "ssh-rsa %s",
+                         strchr(line, ' ') + 1);
+            T_CHECK(m > 0);
+            T_CHECK(ssoossh_cert_parse_line(with_tail, (size_t)m, blob,
+                                            sizeof(blob),
+                                            &nl) != SSOOSSH_CERT_OK);
+        }
+    }
+
+    /* A host certificate is refused. There is no fixture for one, because
+     * the CA private keys are not committed -- so the type field is flipped
+     * inside a real certificate instead, which is exactly the byte an
+     * attacker-supplied host certificate would differ by. The signature is
+     * invalidated by the edit, but the type is read during the parse and
+     * long before check 1 ever verifies one. */
+    if (load_cert("cert_ca_ecdsa384.cert", scratch, sizeof(scratch), &cert)) {
+        uint8_t blob[SSOOSSH_MAX_CERT];
+        size_t full =
+            (size_t)(cert.signature.p + cert.signature.len - cert.blob);
+        uint8_t needle[12];
+        size_t at = 0;
+
+        T_CHECK(cert.type == 1);
+        T_CHECK(full <= sizeof(blob));
+        memcpy(blob, cert.blob, full);
+
+        /* serial (uint64) immediately followed by type (uint32), which is
+         * a unique 12-byte run for a fixture serial. */
+        for (int i = 0; i < 8; i++) {
+            needle[i] = (uint8_t)(cert.serial >> (56 - 8 * i));
+        }
+        needle[8] = 0;
+        needle[9] = 0;
+        needle[10] = 0;
+        needle[11] = 1;
+
+        for (size_t i = 0; i + sizeof(needle) <= full; i++) {
+            if (memcmp(blob + i, needle, sizeof(needle)) == 0) {
+                at = i;
+                break;
+            }
+        }
+        T_CHECKF(at != 0, "could not locate the serial/type run to patch");
+
+        if (at != 0) {
+            ssoossh_cert host;
+
+            /* Unchanged, it still parses. */
+            T_CHECK(ssoossh_cert_parse(blob, full, &host) == SSOOSSH_CERT_OK);
+
+            blob[at + 11] = 2; /* SSH2_CERT_TYPE_HOST */
+            T_CHECK(ssoossh_cert_parse(blob, full, &host) ==
+                    SSOOSSH_CERT_NOT_USER);
+
+            /* And any other value is refused too, not just 2. */
+            blob[at + 11] = 0;
+            T_CHECK(ssoossh_cert_parse(blob, full, &host) ==
+                    SSOOSSH_CERT_NOT_USER);
+        }
     }
 
     /* Every prefix of a real certificate. A parser that reads one field

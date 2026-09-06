@@ -109,9 +109,13 @@ void ssoossh_sshkey_fingerprint(const uint8_t *blob, size_t blob_len,
     out[prefix_len + n] = '\0';
 }
 
+/* '\n' terminates a token as well as the others. A CA file is split on
+ * newlines before a line reaches here, so this only matters to the other
+ * caller: a certificate arrives as a JSON string with the trailing newline
+ * Go's MarshalAuthorizedKey wrote, and it is not part of the base64. */
 static bool is_space(char c)
 {
-    return c == ' ' || c == '\t' || c == '\r';
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n';
 }
 
 bool ssoossh_sshkey_parse_line(const char *line, size_t line_len, uint8_t *blob,

@@ -742,12 +742,22 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
         goto done;
     }
 
-    if (ssoossh_cert_parse_line(a->cert_line, strlen(a->cert_line),
-                                a->cert_blob, sizeof(a->cert_blob),
-                                &a->cert) != SSOOSSH_CERT_OK) {
-        ssoossh_errf("the issued certificate could not be parsed");
-        rc = PAM_AUTH_ERR;
-        goto done;
+    {
+        ssoossh_cert_status cs = ssoossh_cert_parse_line(
+            a->cert_line, strlen(a->cert_line), a->cert_blob,
+            sizeof(a->cert_blob), &a->cert);
+
+        if (cs == SSOOSSH_CERT_NOT_USER) {
+            ssoossh_errf("the issued certificate is not a user certificate, "
+                         "so it does not authenticate anyone");
+            rc = PAM_AUTH_ERR;
+            goto done;
+        }
+        if (cs != SSOOSSH_CERT_OK) {
+            ssoossh_errf("the issued certificate could not be parsed");
+            rc = PAM_AUTH_ERR;
+            goto done;
+        }
     }
 
     {

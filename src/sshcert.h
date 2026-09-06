@@ -79,6 +79,9 @@ typedef struct {
     const uint8_t *blob;
 } ssoossh_cert;
 
+/* SSH2_CERT_TYPE_USER. The other defined value, 2, is a host certificate. */
+#define SSOOSSH_CERT_TYPE_USER 1u
+
 typedef enum {
     SSOOSSH_CERT_OK = 0,
     /* Truncated, over-long, self-inconsistent, or carrying trailing bytes.
@@ -86,6 +89,11 @@ typedef enum {
     SSOOSSH_CERT_MALFORMED,
     /* A well-formed certificate of a key type this module does not handle. */
     SSOOSSH_CERT_UNSUPPORTED,
+    /* A well-formed certificate that is not a user certificate. Separate
+     * from MALFORMED because nothing is wrong with it: it is the wrong
+     * class of credential, which is a different thing to tell an operator
+     * than "this did not parse". */
+    SSOOSSH_CERT_NOT_USER,
 } ssoossh_cert_status;
 
 /* Parses a decoded certificate blob. out borrows from blob, which must

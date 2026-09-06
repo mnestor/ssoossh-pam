@@ -2,23 +2,10 @@
 
 #include <string.h>
 
-#include "base64.h"
+#include "sshkey.h"
 #include "sshwire.h"
 
 #define CERT_SUFFIX "-cert-v01@openssh.com"
-
-/* An algorithm name too long for the buffer is refused rather than
- * truncated: two algorithms with a common prefix would otherwise compare
- * equal. */
-static bool copy_name(const uint8_t *p, size_t len, char *out, size_t out_cap)
-{
-    if (len == 0 || len >= out_cap) {
-        return false;
-    }
-    memcpy(out, p, len);
-    out[len] = '\0';
-    return true;
-}
 
 /* "ecdsa-sha2-nistp384-cert-v01@openssh.com" -> "ecdsa-sha2-nistp384".
  * The base name is what the rebuilt subject key blob is prefixed with, and
@@ -105,8 +92,7 @@ ssoossh_cert_status ssoossh_cert_parse(const uint8_t *blob, size_t blob_len,
 
     ssh_rd_init(&r, blob, blob_len);
 
-    if (!ssh_rd_str(&r, &p, &n) ||
-        !copy_name(p, n, out->algo, sizeof(out->algo))) {
+    if (!ssh_rd_cstr(&r, out->algo, sizeof(out->algo))) {
         return SSOOSSH_CERT_MALFORMED;
     }
     if (!base_algo(out->algo, base, sizeof(base))) {
@@ -147,6 +133,17 @@ ssoossh_cert_status ssoossh_cert_parse(const uint8_t *blob, size_t blob_len,
 
     out->serial = ssh_rd_u64(&r);
     out->type = ssh_rd_u32(&r);
+
+    /* A host certificate attests a machine, not a person. It is otherwise
+     * indistinguishable here -- same algorithm names, same CA, and its
+     * principals are opaque strings that can hold an account name just as
+     * easily as a hostname -- so this field is the only thing that tells
+     * the two classes apart, and nothing downstream looks at it. sshd and
+     * x/crypto/ssh both refuse a non-user certificate at this point; this
+     * is that refusal, not a policy of this module's own. */
+    if (out->type != SSOOSSH_CERT_TYPE_USER) {
+        return SSOOSSH_CERT_NOT_USER;
+    }
 
     if (!ssh_rd_str(&r, &out->key_id.p, &out->key_id.len)) {
         return SSOOSSH_CERT_MALFORMED;
@@ -189,13 +186,10 @@ ssoossh_cert_status ssoossh_cert_parse(const uint8_t *blob, size_t blob_len,
      * it, then the signature body. */
     {
         ssh_rd sr;
-        const uint8_t *algo = NULL;
-        size_t algo_len = 0;
 
         ssh_rd_init(&sr, p, n);
-        if (!ssh_rd_str(&sr, &algo, &algo_len) ||
-            !copy_name(algo, algo_len, out->signature_algo,
-                       sizeof(out->signature_algo))) {
+        if (!ssh_rd_cstr(&sr, out->signature_algo,
+                         sizeof(out->signature_algo))) {
             return SSOOSSH_CERT_MALFORMED;
         }
         if (!ssh_rd_str(&sr, &out->signature.p, &out->signature.len) ||
@@ -212,32 +206,14 @@ ssoossh_cert_status ssoossh_cert_parse_line(const char *line, size_t line_len,
                                             size_t scratch_cap,
                                             ssoossh_cert *out)
 {
-    size_t i = 0, b64_start, b64_len, blob_len = 0;
+    char algo[64];
+    size_t blob_len = 0;
 
-    /* The same shape as an authorized_keys line: a type, a base64 body, and
-     * an optional comment. The type is not trusted -- the blob names itself
-     * and the two are compared after the decode. */
-    while (i < line_len && (line[i] == ' ' || line[i] == '\t')) {
-        i++;
-    }
-    while (i < line_len && line[i] != ' ' && line[i] != '\t') {
-        i++;
-    }
-    while (i < line_len && (line[i] == ' ' || line[i] == '\t')) {
-        i++;
-    }
-    b64_start = i;
-    while (i < line_len && line[i] != ' ' && line[i] != '\t' &&
-           line[i] != '\n' && line[i] != '\r') {
-        i++;
-    }
-    b64_len = i - b64_start;
-    if (b64_len == 0) {
-        return SSOOSSH_CERT_MALFORMED;
-    }
-
-    if (!ssoossh_b64_decode(line + b64_start, b64_len, scratch, scratch_cap,
-                            &blob_len)) {
+    /* The same shape as an authorized_keys line, so it is read by the same
+     * parser -- which also holds the line's type field against the one the
+     * blob names, the check this function used to claim and not make. */
+    if (!ssoossh_sshkey_parse_line(line, line_len, scratch, scratch_cap,
+                                   &blob_len, algo, sizeof(algo), NULL)) {
         return SSOOSSH_CERT_MALFORMED;
     }
     return ssoossh_cert_parse(scratch, blob_len, out);
