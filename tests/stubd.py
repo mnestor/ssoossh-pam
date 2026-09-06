@@ -24,6 +24,12 @@ server makes expensive to reach on purpose:
     error-404     refuses it definitively
     bad-json      a create response that is not JSON
     escape        an approval URL carrying terminal escape sequences
+    cross-origin  approval and events URLs that are not paths, so
+                  prepending the configured origin sends the module to
+                  another host
+    cross-origin-console
+                  the same trick on the two console URLs, which no other
+                  client of ssoosshd consumes
     wrong-key     a certificate for a key the module did not generate
     untrusted     a certificate signed by a CA the module does not trust
 
@@ -123,14 +129,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
             }
 
         approval = "/approve/" + request_id
+        events = f"/api/certs/requests/{request_id}/events"
         if ARGS.scenario == "escape":
             # A hostile server putting terminal control on the tty of a root
             # process. The module must show a URL with none of it left.
             approval = "/approve/\x1b]0;pwned\x07\r" + request_id
+        elif ARGS.scenario == "cross-origin":
+            # Not paths. The module prepends the configured origin, so a
+            # leading "@" turns that origin into userinfo and the request
+            # goes to evil.example -- while the link put in front of the
+            # person approving still begins with the hostname they expect.
+            approval = "@evil.example/approve/" + request_id
+            events = "@evil.example/api/certs/events"
 
         data = {
             "request_id": request_id,
-            "events_url": f"/api/certs/requests/{request_id}/events",
+            "events_url": events,
             "approval_url": approval,
             "expires_at": time.strftime(
                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + ARGS.expires_in)
@@ -138,8 +152,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         }
         if console:
             data["user_code"] = "K7M4-QP2X"
-            data["verification_url"] = "/console"
-            data["verification_url_complete"] = "/c/K7M4QP2X"
+            if ARGS.scenario == "cross-origin-console":
+                # ssoosshd's Go client never reads these two, so the C
+                # module's check is the only thing standing on them.
+                data["verification_url"] = "@evil.example/console"
+                data["verification_url_complete"] = "@evil.example/c/K7M4QP2X"
+            else:
+                data["verification_url"] = "/console"
+                data["verification_url_complete"] = "/c/K7M4QP2X"
 
         self.respond(200, {"data": data, "error": ""})
 

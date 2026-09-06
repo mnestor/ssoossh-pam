@@ -436,7 +436,8 @@ if [ ${#scenarios[@]} -eq 0 ]; then
     scenarios=(approved denied expired failed unknown envelope-error no-cert
                enrolled drop error-500 error-404 bad-json create-500 escape
                wrong-key untrusted expired-cert wrong-principal
-               principals-map slow console cancel-requisite
+               principals-map slow console cross-origin cross-origin-console
+               cancel-requisite
                cancel-bracketed ssh-only-local ssh-only-remote)
 fi
 
@@ -513,6 +514,36 @@ for s in "${scenarios[@]}"; do
             failures=$((failures + 1))
         else
             printf 'ok\n'
+        fi ;;
+    cross-origin)
+        # A server-returned URL that is not a path. Prepended to the
+        # configured origin it names another host, and the module both
+        # fetches it and shows it. Refused before either happens.
+        run cross-origin cross-origin 0 'not a usable path' 15s '' ;;
+    cross-origin-console)
+        # The same trick on the console URLs. These are the two fields no
+        # other ssoosshd client consumes, so nothing else would catch it.
+        # The flow is otherwise the happy path, so the prompt is really
+        # printed -- and the assertion is on what reached the tty, because
+        # a blanked URL is the visible half of the refusal.
+        if [ "$os" = Darwin ]; then
+            skip cross-origin-console 'console mode is not compiled in on macOS'
+        else
+            run cross-origin-console cross-origin-console 0 'console flow' \
+                15s 'mode=console'
+            printf '  %-18s ' "cross-origin-tty"
+            if printf '%s' "$LAST_OUT" | grep -q 'evil\.example'; then
+                printf 'FAILED\n'
+                log "    a cross-origin URL reached the terminal:"
+                printf '%s' "$LAST_OUT" | tail -5 >&2
+                failures=$((failures + 1))
+            elif ! printf '%s' "$LAST_OUT" | grep -q 'Code:'; then
+                printf 'FAILED\n'
+                log "    the console prompt did not reach the terminal at all"
+                failures=$((failures + 1))
+            else
+                printf 'ok\n'
+            fi
         fi ;;
     wrong-key)
         # Check 2: correctly signed, right principals, inside its window,

@@ -326,6 +326,18 @@ static bool join_url(char *dst, size_t dst_cap, const char *base,
 {
     size_t b = strlen(base), r = strlen(rel);
 
+    /* The server's value has to be an absolute path, and this is the only
+     * place that can insist on it. base is a bare origin -- normalize_server
+     * strips every trailing slash -- so a value that does not start with a
+     * slash extends the *authority* rather than the path: "@evil.example/x"
+     * makes the configured host into userinfo and sends the request to
+     * evil.example, and ".evil.example/x" extends the hostname. A leading
+     * "//" is scheme-relative and names a host outright. Every one of these
+     * is both fetched by a root process and printed to the tty as the link
+     * to approve, where it reads as the configured server. */
+    if (rel[0] != '/' || rel[1] == '/') {
+        return false;
+    }
     if (b + r + 1 > dst_cap) {
         return false;
     }
@@ -657,7 +669,8 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
          * the one it used. */
         if (!join_url(a->approval_url, sizeof(a->approval_url), cfg->server,
                       a->approval_url)) {
-            ssoossh_errf("the approval URL is too long to use");
+            ssoossh_errf("the approval URL the server returned is not a "
+                         "usable path");
             rc = PAM_AUTHINFO_UNAVAIL;
             goto done;
         }
@@ -666,7 +679,8 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
 
     if (!join_url(a->events_url, sizeof(a->events_url), cfg->server,
                   a->events_url)) {
-        ssoossh_errf("the events URL is too long to use");
+        ssoossh_errf("the events URL the server returned is not a usable "
+                     "path");
         rc = PAM_AUTHINFO_UNAVAIL;
         goto done;
     }
