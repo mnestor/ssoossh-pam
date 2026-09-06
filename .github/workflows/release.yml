@@ -20,7 +20,9 @@ name: Release
 #   linux-glibc-openssl3_x86_64     RHEL 9+, Debian 12+, Ubuntu 22.04+ ...
 #   linux-glibc-openssl1.1_x86_64   RHEL 8 and its rebuilds
 #   linux-musl_x86_64               Alpine
-#   freebsd14_x86_64                FreeBSD 14
+#   freebsd14_x86_64                FreeBSD 14 -- one per supported major,
+#   freebsd15_x86_64                FreeBSD 15    since base OpenSSL moves
+#                                                 with it
 #   darwin_aarch64                  Apple silicon; the deployment floor is
 #                                   in BUILDINFO, not the name
 #
@@ -188,9 +190,25 @@ jobs:
 
   # No hosted FreeBSD image exists; a VM on the Linux runner, as in
   # cross-platform.yml. Slower, but it is the OpenPAM platform that ships.
+  #
+  # One row per supported major release, because the major *is* the
+  # artifact: base OpenSSL changes with it -- 14 has libcrypto.so.30, 15
+  # has libcrypto.so.35, and no port supplies the other's -- so a module
+  # built on one does not load on the other, and nothing a host can install
+  # will rescue it. FreeBSD 13 reached end of life in April 2026 and is not
+  # built. The minor version here is only the newest image
+  # cross-platform-actions publishes; the artifact carries the major.
   freebsd:
-    name: freebsd14_x86_64
+    name: freebsd${{ matrix.major }}_x86_64
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - major: "14"
+            version: "14.4"
+          - major: "15"
+            version: "15.1"
     steps:
       - uses: actions/checkout@v7
         with:
@@ -198,14 +216,17 @@ jobs:
 
       # The VM has no git, so the Makefile's `git describe` fallback would
       # name this tarball pam_ssoossh-dev-... in a release of everything
-      # else. Resolve the version on the host and hand it over.
-      - run: echo "VERSION=$(git describe --tags --always --dirty)" >>"$GITHUB_ENV"
+      # else. Resolve the version on the host and hand it over, with the
+      # homepage the package records, as the release job does for nfpm.
+      - run: |
+          echo "VERSION=$(git describe --tags --always --dirty)" >>"$GITHUB_ENV"
+          echo "PKG_HOMEPAGE=${{ github.server_url }}/${{ github.repository }}" >>"$GITHUB_ENV"
 
       - uses: cross-platform-actions/action@v1.5.0
         with:
           operating_system: freebsd
-          version: "14.2"
-          environment_variables: VERSION
+          version: ${{ matrix.version }}
+          environment_variables: VERSION PKG_HOMEPAGE
           run: |
             set -ex
             # The image's package set is older than the repo, and pkg is
@@ -216,7 +237,7 @@ jobs:
             sudo pkg install -y gmake pkgconf curl bash python3
             got=$(tests/dist-target.sh)
             echo "image reports: $got"
-            test "$got" = freebsd14_x86_64
+            test "$got" = freebsd${{ matrix.major }}_x86_64
             gmake
             gmake test
             gmake check-stdio
@@ -228,12 +249,20 @@ jobs:
             # cross-platform.yml does.
             sudo hostname freebsd-ci
             sudo gmake e2e
-            gmake dist DIST_TARGET=freebsd14_x86_64
+            gmake dist DIST_TARGET=freebsd${{ matrix.major }}_x86_64
+            # `pkg create` exists only on FreeBSD, and stamps the package
+            # with the ABI of the host it ran on -- so the package is built
+            # here, in the VM for its own major, rather than on the Linux
+            # runner that merges the release.
+            packaging/package.sh dist/*.tar.gz dist
+            ls -l dist
 
       - uses: actions/upload-artifact@v7
         with:
-          name: dist-freebsd14_x86_64
-          path: dist/*.tar.gz
+          name: dist-freebsd${{ matrix.major }}_x86_64
+          path: |
+            dist/*.tar.gz
+            dist/*.pkg
           if-no-files-found: error
           retention-days: 7
 
@@ -380,9 +409,10 @@ jobs:
       - name: Every artifact arrived
         run: ls -l dist
 
-      # deb, rpm and apk from the Linux tarballs; the macOS tarball is
-      # passed over here, its package having been built on the Mac. nfpm is
-      # pinned by version and hash; bump both together from
+      # deb, rpm and apk from the Linux tarballs; the macOS and FreeBSD
+      # tarballs are passed over here, their packages having been built in
+      # the jobs that could build them. nfpm is pinned by version and hash;
+      # bump both together from
       # https://github.com/goreleaser/nfpm/releases.
       - name: Install nfpm
         env:
@@ -474,9 +504,11 @@ jobs:
           ls -l dist
 
       # SHA256SUMS covers everything, and the GPG signature over it covers
-      # the tarballs, which have no signature of their own (the pkg carries
-      # Apple's, and is listed so one file names every artifact). The public key
-      # is published beside it so a first-time verifier has something to
+      # the tarballs and the FreeBSD packages, which have no signature of
+      # their own -- pkg(8) signs a repository catalogue rather than a
+      # package file. The macOS .pkg carries Apple's own signature and is
+      # listed anyway, so one file names every artifact. The public key is
+      # published beside it so a first-time verifier has something to
       # import; its fingerprint belongs in the README too, so the release
       # is not the only place the key is vouched for.
       - name: Checksums and signature

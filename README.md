@@ -169,7 +169,7 @@ Build dependencies are libpam, libcrypto and libcurl:
 | --- | --- | --- | --- |
 | Linux glibc (x86-64, arm64) | OpenSSL ≥ 1.1.1 | yes | yes |
 | Linux musl / Alpine | OpenSSL ≥ 1.1.1 | yes | yes |
-| FreeBSD | OpenSSL in base | yes | yes |
+| FreeBSD 14, 15 | OpenSSL in base | yes | yes — one per major |
 | macOS 15+ (Apple silicon) | Security.framework | no | yes — a signed `.pkg` |
 
 **OpenSSL 1.1.1 is a hard floor**, set by RHEL 8. A build against anything
@@ -307,7 +307,9 @@ and `PAM_AUTH_ERR` there, and an `ssh-rsa` (SHA-1) certificate is refused
 here and accepted there.
 
 **Verified on FreeBSD and macOS in the release pipeline:** every tagged
-build puts both through the same gates. FreeBSD 14 builds in a VM and runs
+build puts both through the same gates. FreeBSD 14 and 15 each build in a VM
+of their own — they are two platforms wearing one name, since base OpenSSL
+moves with the major release — and each runs
 the unit suites, the stdio and size gates, and the end-to-end suite. macOS
 builds on a hosted macOS 26 runner for a deployment floor of 15 and runs
 those same gates plus `make check-apple-spi`, which puts the Ed25519 SecKey
@@ -342,14 +344,16 @@ container or VM, put through the same gates as CI, packaged with
 build provenance. A tag with a hyphen (`v1.2.0-rc1`) is a pre-release;
 `gh workflow run release.yml` builds everything and publishes nothing.
 
-Each tarball holds the stripped module, the man page, the licence, and a
+Each tarball holds the stripped module, the man page, the licence, a
 `BUILDINFO` naming the compiler, the library versions it was built against,
-and the sonames it needs. The name says where it loads, because the module
-links the host's libraries rather than shipping them. The Linux tarballs are
-also wrapped as distribution packages by [nfpm](https://nfpm.goreleaser.com)
-(`packaging/`), which install the module where that distribution's libpam
-looks and declare the sonames it needs, and the macOS one as an installer
-package built with Apple's own tools:
+and the sonames it needs, and a `preflight.sh` that answers the one question
+that matters before installing any of it — see below. The name says where it
+loads, because the module links the host's libraries rather than shipping
+them. The Linux tarballs are also wrapped as distribution packages by
+[nfpm](https://nfpm.goreleaser.com) (`packaging/`), which install the module
+where that distribution's libpam looks and declare the sonames it needs, the
+FreeBSD ones as `pkg(8)` packages, and the macOS one as an installer package
+built with Apple's own tools:
 
 Every artifact is named `<package>_<version>_<os>_<arch>`, the version
 without its leading `v` — `pam-ssoossh_1.2.0_linux-glibc-openssl3_x86_64.rpm`.
@@ -360,7 +364,8 @@ The `<os>` field is what decides whether the module will load:
 | `linux-glibc-openssl3_{x86_64,aarch64}` | RHEL 9 and rebuilds, Debian 12+, Ubuntu 22.04+, anything with `libcrypto.so.3` | `.deb`, `.rpm` |
 | `linux-glibc-openssl1.1_{x86_64,aarch64}` | RHEL 8 and rebuilds, anything with `libcrypto.so.1.1` | `.rpm` |
 | `linux-musl_{x86_64,aarch64}` | Alpine | `.apk` |
-| `freebsd14_x86_64` | FreeBSD 14 | tarball only |
+| `freebsd14_x86_64` | FreeBSD 14, which has `libcrypto.so.30` in base | `.pkg` |
+| `freebsd15_x86_64` | FreeBSD 15, which has `libcrypto.so.35` in base | `.pkg` |
 | `darwin_aarch64` | macOS 15 and later on Apple silicon | `.pkg`, Developer ID signed and notarized |
 
 The `.deb` files spell the architecture Debian's way — `amd64`, `arm64` —
@@ -379,7 +384,27 @@ since `/usr/lib/pam` is protected by System Integrity Protection, and a
 [`docs/examples/pam.d/sudo_local`](docs/examples/pam.d/sudo_local) is the
 stanza for `sudo` on a Mac.
 
-`tests/dist-target.sh` prints which of those the machine you are on wants.
+`tests/dist-target.sh` prints which of those the machine you are on wants,
+and it rides along in every tarball beside `preflight.sh`, which compares it
+against the `target:` in `BUILDINFO` and then asks the loader whether every
+soname the module links actually resolves here:
+
+```console
+$ ./preflight.sh
+preflight: built for freebsd15_x86_64, which is what this host wants
+preflight: every soname the module links resolves on this host
+```
+
+Worth the two seconds, because neither mistake fails at install time — a
+module that links a soname this host does not have installs perfectly and
+then fails inside `sudo`, at authentication. `make install` runs the same
+check on what it is about to install (`PREFLIGHT=0` skips it, for a
+deliberate cross-install into a `DESTDIR`). FreeBSD is where this bites
+hardest: base OpenSSL changes with the major release, so a `freebsd14`
+module needs a `libcrypto.so.30` that a FreeBSD 15 host does not have and no
+port supplies. Installing the `.pkg` rather than the tarball makes that
+`pkg`'s problem instead of yours — it refuses a package whose ABI is not the
+host's.
 
 Releases are signed when the repository holds the keys: the deb and rpm
 packages and `SHA256SUMS` with an OpenPGP key, the apk with the RSA key

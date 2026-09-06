@@ -6,6 +6,10 @@
 #   linux-glibc-openssl3_*     deb (Debian 12+, Ubuntu 22.04+) and rpm (EL 9+)
 #   linux-glibc-openssl1.1_*   rpm (EL 8)
 #   linux-musl_*               apk (Alpine)
+#   freebsd*                   pkg, through freebsd.sh -- on FreeBSD only,
+#                              and only on the major release the tarball
+#                              was built for, since pkg takes a package's
+#                              ABI from the host
 #   darwin_*                   pkg, through macos.sh -- on a Mac only, since
 #                              the tools that build and sign one exist
 #                              nowhere else
@@ -89,6 +93,20 @@ linux-*)
         exit 1
         ;;
     esac
+    ;;
+freebsd*)
+    # pkg create exists only on FreeBSD, and the package it writes is
+    # stamped with the ABI of the host it ran on, so this is built in the
+    # release workflow's FreeBSD VM. On the Linux runner that merges the
+    # release, as with the macOS package below, it is a no-op.
+    if [ "$(uname -s)" = FreeBSD ]; then
+        # Not exec: the trap above still has this script's staging to
+        # remove. freebsd.sh unpacks the tarball again for itself.
+        "$here/freebsd.sh" "$tarball" "$outdir"
+        exit 0
+    fi
+    echo "package: $target is packaged on FreeBSD (packaging/freebsd.sh); nothing to do here"
+    exit 0
     ;;
 darwin)
     # The installer package needs pkgbuild, productbuild and codesign,

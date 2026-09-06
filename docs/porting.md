@@ -2,7 +2,8 @@
 
 **Both are built and gated in the release pipeline.** Every tagged build
 runs the unit suites, the stdio and size gates and the end-to-end suite on
-FreeBSD 14 in a VM and on a hosted macOS 26 runner, and the macOS job
+FreeBSD 14 and 15, each in a VM of its own, and on a hosted macOS 26
+runner, and the macOS job
 additionally runs `make check-apple-spi` — the Ed25519 SecKey SPI put
 through its known-answer self-test against the running system. `v1.0.0`
 shipped artifacts for both, the macOS installer signed and notarized, and
@@ -52,7 +53,14 @@ hand.
 
 ### A machine
 
-Any FreeBSD 13 or 14 will do. A VM is fine; this needs no hardware.
+Any supported FreeBSD will do, which as of 2026 means 14 or 15 — 13 reached
+end of life in April 2026. A VM is fine; this needs no hardware.
+
+Which one matters more than it looks. Base OpenSSL changes with the major
+release: 14 has `libcrypto.so.30`, 15 has `libcrypto.so.35`, and no port
+supplies the other's, so a module built on one cannot be made to load on the
+other by installing anything. The release pipeline builds an artifact for
+each, and a build here is a build for the major you are on and no other.
 
 - `pkg install` needs network.
 - The e2e harness needs root, which in a VM you have.
@@ -160,7 +168,28 @@ failing first in the log is expected, not an error.
    should be handled — but if the build fails looking for a header rather
    than a library, that is the fallback not being enough.
 
-4. **A return code differs from Linux.** That is the whole reason this
+4. **The module installs cleanly and then does not load, with
+   `libcrypto.so.30 => not found` in `ldd`.** This is a release tarball for
+   the wrong major release: `.so.30` is FreeBSD 14's base OpenSSL and
+   `.so.35` is 15's, and no port supplies either — the ports OpenSSLs carry
+   sonames of their own. Nothing installable fixes it; take the artifact for
+   the major you are on, or build here. `preflight.sh`, which ships in every
+   tarball, says so before you install rather than after:
+
+   ```console
+   $ ./preflight.sh
+   preflight: this module was built for freebsd14_x86_64 and this host wants freebsd15_x86_64.
+   ```
+
+   The `.pkg` cannot make the mistake at all: `pkg` refuses a package whose
+   ABI is not the host's.
+
+   If a copy was staged in `/usr/lib` while working this out, remove it:
+   `/usr/lib` comes before `/usr/local/lib` in OpenPAM's module path, so it
+   shadows whatever the package installs and the bare name keeps resolving
+   to the dead module. `preflight.sh` warns when it sees one.
+
+5. **A return code differs from Linux.** That is the whole reason this
    platform is a target. Linux-PAM and OpenPAM number their constants
    differently — `7` is `PAM_AUTH_ERR` on one and `PAM_PERM_DENIED` on the
    other — and this module takes every constant from
@@ -168,7 +197,7 @@ failing first in the log is expected, not an error.
    If a scenario's *decision* is wrong rather than its numbering, that is a
    real bug.
 
-5. **`PAM_IGNORE` behaves differently under a control flag.** The two
+6. **`PAM_IGNORE` behaves differently under a control flag.** The two
    `cancel-*` scenarios exist for this. OpenPAM's dispatcher is an
    independent implementation of Linux-PAM's, and OpenPAM has `binding`
    where Linux-PAM has bracketed actions. If `PAM_IGNORE` is treated as a

@@ -41,17 +41,30 @@ jobs:
   #
   # FreeBSD is the OpenPAM target that actually ships, so it matters more
   # than macOS: it is the platform where a bug here reaches a real host.
+  #
+  # Both supported majors, because they are two platforms wearing one name:
+  # base OpenSSL is 3.0 on 14 and 3.5 on 15, so they link different
+  # libcrypto sonames and release.yml ships an artifact for each. A green
+  # 14 says nothing about 15.
   freebsd:
-    name: freebsd
+    name: freebsd${{ matrix.major }}
     if: ${{ inputs.job == 'both' || inputs.job == 'freebsd' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - major: '14'
+            version: '14.4'
+          - major: '15'
+            version: '15.1'
     steps:
       - uses: actions/checkout@v7
 
       - uses: cross-platform-actions/action@v1.5.0
         with:
           operating_system: freebsd
-          version: '14.2'
+          version: ${{ matrix.version }}
           # One script rather than several steps: each `run` is a fresh VM
           # session, so state does not carry between them.
           run: |

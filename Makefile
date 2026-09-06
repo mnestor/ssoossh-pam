@@ -494,6 +494,10 @@ plan-serve:
 # platform; the release workflow passes DIST_TARGET explicitly and asserts
 # the two agree.
 #
+# preflight.sh and dist-target.sh ride along so that the answer to "does
+# this one load here" is in the hands of the person holding the tarball,
+# rather than in a repository they would have to clone to ask.
+#
 #   make dist                                dist/pam-ssoossh_<version>_<target>.tar.gz
 #   make dist DIST_TARGET=linux-musl_x86_64  name it for the workflow's matrix entry
 #
@@ -521,6 +525,8 @@ dist: unsanitised
 	mkdir -p "$$stage/man" "$$stage/examples"; \
 	cp docs/*.8 docs/*.5 "$$stage/man/"; \
 	cp -R docs/examples/. "$$stage/examples/"; \
+	cp packaging/preflight.sh tests/dist-target.sh "$$stage/"; \
+	chmod 0755 "$$stage/preflight.sh" "$$stage/dist-target.sh"; \
 	{ \
 	  echo "package:   $(DIST_NAME)"; \
 	  echo "version:   $(VERSION)"; \
@@ -558,7 +564,14 @@ packages: dist
 MANDIR ?= /usr/local/share/man
 DOCDIR ?= /usr/local/share/doc/pam_ssoossh
 
+# A module that links a soname this host does not have installs perfectly
+# and then fails inside sudo, at authentication. packaging/preflight.sh
+# asks the loader first. PREFLIGHT=0 to install anyway, which is what a
+# deliberate cross-install into a DESTDIR for another host wants.
+PREFLIGHT ?= 1
+
 install: $(MODULE)
+	@test "$(PREFLIGHT)" = 0 || packaging/preflight.sh $(MODULE)
 	@test -n "$(SECURITYDIR)" || { \
 	  echo "install: no PAM module directory found on this system;" \
 	       "pass SECURITYDIR=<dir>" >&2; exit 1; }

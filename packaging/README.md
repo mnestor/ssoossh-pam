@@ -6,23 +6,28 @@ it is given, which is the right shape for a C module: nothing here builds
 anything. The module in a package is byte-for-byte the one in the tarball
 for the same target.
 
-The macOS package is the same idea with Apple's tools: `macos.sh` lays the
-tarball out as it will land on the host, signs the module, wraps it with
-`pkgbuild` and `productbuild`, signs the package, and has Apple notarize
-it.
+The macOS and FreeBSD packages are the same idea with each platform's own
+tool, and both are built where that tool exists rather than in the job that
+merges the release: `macos.sh` lays the tarball out as it will land on the
+host, signs the module, wraps it with `pkgbuild` and `productbuild`, signs
+the package, and has Apple notarize it; `freebsd.sh` does the same laying
+out and hands it to `pkg create`.
 
 | file | does |
 | --- | --- |
 | `nfpm.yaml` | what goes where, and what each format calls the libraries the module needs |
-| `package.sh` | one tarball in, its packages out: picks formats, module directory and soname by target; hands a macOS tarball to `macos.sh` |
+| `package.sh` | one tarball in, its packages out: picks formats, module directory and soname by target; hands a macOS tarball to `macos.sh` and a FreeBSD one to `freebsd.sh` |
 | `macos.sh` | one macOS tarball in, a signed and notarized `.pkg` out |
 | `macos/` | the installer's `Distribution.xml` (title, arm64 only, OS floor) and its welcome and readme panes |
-| `version.sh` | `git describe` into a package version, shared by both |
+| `freebsd.sh` | one FreeBSD tarball in, a `pkg(8)` package out, on the major release it was built for |
+| `preflight.sh` | ships *in* the tarball: does this module load on this host? |
+| `version.sh` | `git describe` into a package version, shared by all three |
 
 ```console
-$ make packages                       # from `make dist`; nfpm on Linux, pkgbuild on a Mac
+$ make packages                       # from `make dist`; nfpm on Linux, pkgbuild on a Mac, pkg on FreeBSD
 $ packaging/package.sh dist/pam-ssoossh_1.2.0_linux-glibc-openssl3_x86_64.tar.gz
 $ packaging/package.sh dist/pam-ssoossh_1.2.0_darwin_aarch64.tar.gz     # on a Mac
+$ packaging/package.sh dist/pam-ssoossh_1.2.0_freebsd15_x86_64.tar.gz   # on FreeBSD 15
 ```
 
 ## Which target becomes which package
@@ -32,7 +37,7 @@ $ packaging/package.sh dist/pam-ssoossh_1.2.0_darwin_aarch64.tar.gz     # on a M
 | `linux-*-glibc-openssl3` | deb, rpm | `/usr/lib/<triplet>/security`, `/usr/lib64/security` |
 | `linux-*-glibc-openssl1.1` | rpm | `/usr/lib64/security` |
 | `linux-*-musl` | apk | `/lib/security` |
-| `freebsd*` | none | — |
+| `freebsd*` | pkg | `/usr/local/lib` |
 | `macos*-aarch64` | pkg | `/usr/local/lib/pam` |
 
 The macOS module goes under `/usr/local` because `/usr/lib/pam`, the one
@@ -45,6 +50,60 @@ the target name). Man pages go to `/usr/local/share/man`, the examples and
 `BUILDINFO` to `/usr/local/share/doc/pam_ssoossh`. Removing it is deleting
 those files and `pkgutil --forget org.mikenestor.pam_ssoossh`.
 
+The FreeBSD module goes to `/usr/local/lib`, which is the second entry in
+OpenPAM's own module path — `/usr/lib`, then `${LOCALBASE}/lib`, then
+`${LOCALBASE}/lib/security` — so a `pam.d` line naming `pam_ssoossh.so`
+finds it without an absolute path and nothing of ours is written into a
+base directory. Man pages go to `/usr/local/share/man` uncompressed, since
+FreeBSD stopped compressing them in ports and `man(1)` reads either, and
+the examples, `LICENSE` and `BUILDINFO` to
+`/usr/local/share/doc/pam_ssoossh`. Removing it is `pkg delete pam_ssoossh`.
+
+A copy of the module left in `/usr/lib` shadows this one — `/usr/lib` comes
+first in that search order — so a `pam.d` line naming the bare module would
+keep loading the stale one. `preflight.sh` warns when it finds one; there is
+nothing a package can do about it, since `/usr/lib` belongs to base.
+
+The package's own name is `pam_ssoossh`, with an underscore, because that
+is what FreeBSD calls a PAM module (`pam_ssh_agent_auth`, `pam_mysql`) and
+what a `security/pam_ssoossh` port would be called; only the file keeps the
+project's `<package>_<version>_<os>_<arch>` spelling.
+
+### One package per FreeBSD major, and why pkg matters here
+
+Base OpenSSL changes with the major release — FreeBSD 14 has
+`libcrypto.so.30`, FreeBSD 15 has `libcrypto.so.35` — and no port supplies
+the other's: the ports OpenSSLs carry sonames of their own
+(`openssl-3.0.22` → `libcrypto.so.12`, `openssl34` → `libcrypto.so.16`),
+none of which is either base soname. So a module built on 14 cannot be made to load
+on 15 by installing anything, and `release.yml` builds one artifact per
+supported major. FreeBSD 13 reached end of life in April 2026 and is not
+built.
+
+That is also why these get a package at all, when the tarball already
+carries the module. `pkg` stamps each package with the ABI of the release it
+was built on — `FreeBSD:14:amd64`, `FreeBSD:15:amd64` — and refuses to
+install one whose ABI does not match the host. Without it, the wrong
+download fails as an unresolved `libcrypto.so.30` inside `sudo`, at
+authentication, which is the worst place for it to surface. With it, the
+wrong download fails as `pkg install` saying no.
+
+`pkg create` takes that ABI from the host and offers no way to override it,
+so `freebsd.sh` refuses to package a tarball for a major it is not running
+on: a 14 tarball packaged on a 15 host would be labelled `FreeBSD:15` and
+carry exactly the module that cannot load there.
+
+nfpm has no FreeBSD packager and `pkg create` exists only on FreeBSD, so
+this is built in the release workflow's FreeBSD VM rather than on the runner
+that merges the release — same arrangement as the macOS package.
+
+Nothing here signs a `.pkg`: `pkg` signs a repository catalogue, not a
+package file, so what covers these is the `SHA256SUMS` signature like the
+tarballs. Serving them as a signed repository — `pkg repo <dir> <rsa-key>`,
+one per ABI, with a conf in `/usr/local/etc/pkg/repos` — is the next step if
+these are ever published anywhere but a release page, and the RSA key it
+wants is the same shape as the apk one.
+
 No deb for the OpenSSL 1.1 build: the Debian and Ubuntu releases that had
 `libssl1.1` are past their support dates. Add one in `package.sh` if that
 ever matters.
@@ -55,6 +114,12 @@ derive on their own and never gets renamed. Debian has no such provides, so
 the deb names packages, with both spellings of the ones the 64-bit `time_t`
 transition renamed (`libssl3t64 | libssl3`).
 
+The FreeBSD package names one dependency, `curl`, because that is the only
+library the module links that base does not have — base ships `fetch(1)`.
+libpam and libcrypto are in base and belong to no package, so there is
+nothing to depend on for them and the major release is what says which
+libcrypto that is.
+
 Nothing is written to `/etc/pam.d`. Wiring the module into a service is the
 operator's decision, and `pam_ssoossh(8)` is the place it is described.
 
@@ -62,15 +127,23 @@ operator's decision, and `pam_ssoossh(8)` is the place it is described.
 
 `git describe` becomes the package version:
 
-| tag or describe | deb, rpm | apk |
-| --- | --- | --- |
-| `v1.2.0` | `1.2.0` | `1.2.0` |
-| `v1.2.0-rc1` | `1.2.0~rc1` | `1.2.0_rc1` |
-| `v1.2.0-3-gabc1234` | `1.2.0~3.gabc1234` | `1.2.0_3.gabc1234` |
-| no tag at all | `0.0.0~dev.abc1234` | `0.0.0_dev.abc1234` |
+| tag or describe | deb, rpm | apk | FreeBSD pkg |
+| --- | --- | --- | --- |
+| `v1.2.0` | `1.2.0` | `1.2.0` | `1.2.0` |
+| `v1.2.0-rc1` | `1.2.0~rc1` | `1.2.0_rc1` | `1.2.0.pre.rc1` |
+| `v1.2.0-3-gabc1234` | `1.2.0~3.gabc1234` | `1.2.0_3.gabc1234` | `1.2.0.pre.3.gabc1234` |
+| no tag at all | `0.0.0~dev.abc1234` | `0.0.0_dev.abc1234` | `0.0.0.pre.dev.abc1234` |
 
 A pre-release sorts *before* the release it precedes in every format, and
 an untagged build can never outrank a real one on a host.
+
+FreeBSD has no separate pre-release field — `pkg` compares one version
+string against another — and the only component that sorts below a version
+that simply ends is one that begins with `pl`, `alpha`, `beta`, `pre`, `rc`
+or `snap`, whose version number `pkg-version(8)` takes as −1 against the
+implicit 0. Hence the literal `pre`, which does for a `pkg` version what
+`~` does for a deb one, and which is needed even for `3.gabc1234`: that
+begins with a digit and would otherwise sort *above* the tag it follows.
 
 ## Signing
 
@@ -214,6 +287,14 @@ notarization ticket behind it:
 $ spctl --assess --type install -vv pam-ssoossh_*.pkg
 $ pkgutil --check-signature pam-ssoossh_*.pkg
 $ xcrun stapler validate pam-ssoossh_*.pkg
+```
+
+On FreeBSD the `SHA256SUMS` signature is the check, and `pkg` itself
+refuses a package built for the wrong major:
+
+```console
+$ pkg install ./pam-ssoossh_1.2.0_freebsd15_x86_64.pkg
+$ pkg info -F ./pam-ssoossh_1.2.0_freebsd15_x86_64.pkg   # ABI, deps, files
 ```
 
 And when the repository is public, GitHub's own provenance:
