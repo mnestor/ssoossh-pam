@@ -131,8 +131,23 @@ bool ssoossh_check_principal(const ssoossh_cert *cert, const char *username,
                              const char *map_path)
 {
     char listed[512];
+    bool mapped = false;
 
     principals_string(cert, listed, sizeof(listed));
+
+    /* The account's own name is always enough. The map only ever adds
+     * principals to an account -- it is not a way to lock one out -- so an
+     * account the map does not mention, an account listed with nothing, and
+     * a map that could not be read at all all leave this check exactly
+     * where it would be with no map configured. That is what makes a
+     * failed load safe: it can only ever withdraw an extra way in, never
+     * open one. */
+    if (ssoossh_cert_has_principal(cert, username)) {
+        ssoossh_debugf("check 3/4 principal: certificate principals [%s] "
+                       "include account \"%s\" (exact match)",
+                       listed, username);
+        return true;
+    }
 
     if (map_path != NULL && map_path[0] != '\0') {
         ssoossh_principals allowed;
@@ -159,35 +174,32 @@ bool ssoossh_check_principal(const ssoossh_cert *cert, const char *username,
                 count++;
             }
 
-            if (!ssoossh_principals_allow(&allowed, names, count)) {
-                ssoossh_errf("certificate principals [%s] are not authorized "
-                             "for account \"%s\" per %s (%zu principal(s) "
-                             "allowed there)",
-                             listed, username, map_path, allowed.count);
-                return false;
+            if (ssoossh_principals_allow(&allowed, names, count)) {
+                ssoossh_debugf("check 3/4 principal: account \"%s\" authorized "
+                               "via principals-map %s (certificate principals "
+                               "[%s])",
+                               username, map_path, listed);
+                return true;
             }
-            ssoossh_debugf("check 3/4 principal: account \"%s\" authorized via "
-                           "principals-map %s (certificate principals [%s])",
-                           username, map_path, listed);
-            return true;
+            mapped = true;
+        } else {
+            /* Warning, not debug: an operator who configured a map needs to
+             * learn it is being ignored without first turning debug on. */
+            ssoossh_warnf("principals-map %s could not be loaded, so only an "
+                          "exact principal match applies: %s",
+                          map_path, err);
         }
-
-        /* Warning, not debug: an operator who configured a map needs to
-         * learn it is being ignored without first turning debug on. */
-        ssoossh_warnf("principals-map %s could not be loaded, falling back to "
-                      "exact principal match: %s",
-                      map_path, err);
     }
 
-    if (!ssoossh_cert_has_principal(cert, username)) {
+    if (mapped) {
+        ssoossh_errf("certificate principals [%s] include neither the account "
+                     "\"%s\" nor any principal %s maps to it",
+                     listed, username, map_path);
+    } else {
         ssoossh_errf("certificate principals [%s] do not include \"%s\"",
                      listed, username);
-        return false;
     }
-    ssoossh_debugf("check 3/4 principal: certificate principals [%s] include "
-                   "account \"%s\" (exact match)",
-                   listed, username);
-    return true;
+    return false;
 }
 
 bool ssoossh_check_validity(const ssoossh_cert *cert, int64_t now,

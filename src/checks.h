@@ -38,11 +38,17 @@ bool ssoossh_check_key_binding(const ssoossh_cert *cert, const uint8_t *our_key,
 /* Check 3: the certificate's principals must authorize the local account
  * PAM is authenticating -- not an OIDC identity the module never sees.
  *
- * With no map configured this is an exact match. With one configured, a
- * principal mapped to the account is accepted too. A map that is configured
- * but fails to load logs a warning and falls back to the exact match rather
- * than failing the login: a typo'd path degrades to the stricter default
- * instead of locking every account out of the host. */
+ * The account's own name is always enough. A map only ever adds principals
+ * to an account, so a map that is configured but fails to load logs a
+ * warning and leaves exactly the policy that applies with no map at all --
+ * losing it can only ever withdraw an extra way in, never open one, which
+ * is what makes the failure safe rather than merely tolerable.
+ *
+ * The map is therefore not a way to lock an account out. An account it does
+ * not mention and an account listed with nothing are the same thing: they
+ * add nothing. Denying an account is the job of the tools that already do
+ * it -- the account's own existence, sudoers, pam_access -- not of a file
+ * whose absence has to fail open so a bad edit cannot take the host. */
 bool ssoossh_check_principal(const ssoossh_cert *cert, const char *username,
                              const char *map_path);
 

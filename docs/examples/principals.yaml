@@ -1,26 +1,30 @@
-# /etc/ssoossh/principals.yaml -- who may become each local account.
+# /etc/ssoossh/principals.yaml -- extra principals that may become an account.
 #
 # Left side: a local account on this host. Right side: the certificate
-# principals allowed to authenticate as it. For a PAM request, ssoosshd puts
-# the *approver's* identity in the principals -- their username as the
-# identity provider spells it -- never the local account that was asked
-# for. So list identities here, not local names, unless they are the same.
+# principals allowed to authenticate as it, *in addition to* the account's
+# own name. For a PAM request, ssoosshd puts the *approver's* identity in
+# the principals -- their username as the identity provider spells it --
+# never the local account that was asked for. So list identities here, not
+# local names, unless they are the same.
 #
-# Once this file loads it is authoritative: an account with no entry is
-# denied, even if a certificate principal happens to equal its name. A file
-# that fails to load is ignored with a warning, and the module then requires
-# the exact local account name -- stricter, never looser.
+# This file only ever adds. An account always accepts its own name, so an
+# account that needs nothing extra needs no entry at all -- and an entry
+# with no principals adds nothing, which is the same as leaving it out. It
+# is not a way to deny an account: that belongs to whether the account
+# exists, to sudoers(5), and to pam_access(8).
+#
+# That is also why losing this file is safe. A file that fails to load is
+# ignored with a warning, and the module then requires the exact local
+# account name -- the mapped identities lose their access until it is
+# fixed, and nothing gains any.
 #
 # Format: a fixed subset of YAML, see pam_ssoossh-principals(5). Block
 # lists, flow lists, and empty (or null / ~) entries. Nothing else.
 
-alice:
-  - alice
-bob: [bob]
-
-# A shared account two people may become.
+# A shared account two people may become. Neither "alice" nor "bob" needs
+# an entry of their own to become alice or bob.
 deploy: [alice, bob]
 
-# Nobody becomes root through ssoossh. An entry with no principals is a
-# deliberate "no"; leaving root out entirely would mean the same.
-root:
+# A robot identity that reaches a build account.
+ci:
+  - build-robot

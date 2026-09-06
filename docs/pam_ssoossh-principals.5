@@ -53,41 +53,50 @@ parse error.
 .PP
 Matching is exact and case\-sensitive on both sides.
 .SH SEMANTICS
-.TP
-The map loads.
-It is authoritative for every account on the host. A certificate passes
-check 3 when one of its principals is listed under the account being
-authenticated. An account with no entry is denied, even when a certificate
-principal happens to equal its name: absence from the file is a decision,
-not an oversight.
+.PP
+The map only ever
+.I adds
+principals to an account. It is not a way to lock one out \(em an account it
+does not mention and an account listed with nothing are the same thing, and
+both leave the account exactly where it would be with no map at all. Denying
+an account belongs to the tools that already do it: whether the account
+exists, \fBsudoers\fR(5), \fBpam_access\fR(8).
 .TP
 No map is configured.
 The certificate must carry the local account name itself as a principal.
 .TP
+The map loads.
+A certificate passes check 3 when it carries the local account name, or when
+one of its principals is listed under that account. The second is the whole
+point: it is how an identity that is not the account name \(em an e\-mail
+local part, a team name \(em reaches the account.
+.TP
 The map is configured but cannot be loaded.
 Missing, unreadable, or malformed: the module logs a warning saying so and
-behaves as if no map were configured. The login is not failed, so a
-mistyped path or a bad edit degrades to the
-.I stricter
-policy rather than locking every account out of the host. That is also why
+behaves as if no map were configured. The login is not failed, and because
+the map could only ever have added principals, losing it can only withdraw
+an extra way in \(em never open one. A mistyped path or a bad edit costs the
+mapped identities their access until it is fixed; it cannot grant access
+that was not already there, and it cannot take the host. That is also why
 the parser is strict: a file that parses one way here and another way
-elsewhere would change policy silently.
+elsewhere would change which identities work, silently.
 .SH LIMITS
 Up to 64 principals per account, each up to 127 bytes. Only the entry for
 the account being authenticated is kept, but the whole file is parsed and
 validated on every attempt, because a malformed line anywhere decides
 whether the map loads at all.
 .SH EXAMPLE
-A host where the identity provider's usernames are e\-mail local parts and
-two people share an operations account:
+Two people share an operations account, and a robot identity reaches a
+build account. Note that no entry is needed for alice to become
+.BR alice :
+an account always accepts its own name, so the file lists only the
+identities that would not otherwise reach one.
 .PP
 .RS
 .nf
 # /etc/ssoossh/principals.yaml
-alice:  [alice]
-bob:    [bob]
-deploy: [alice, bob]
-root:              # nobody becomes root through ssoossh
+deploy: [alice, bob]     # both reach the shared ops account
+ci:     [build\-robot]
 .fi
 .RE
 .SH FILES

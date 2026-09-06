@@ -5,11 +5,12 @@
  * for the same reason -- gopkg.in/yaml.v3 cost 549 KB of module size to
  * read a file with exactly one shape -- and the subset it accepts is the
  * contract this port has to reproduce, error for error. A file that loaded
- * there must load here, and a file that failed there must fail here, because
- * pam_ssoossh treats a map that fails to load as no map at all and falls
- * back to requiring the exact local account name. That fallback is a
- * different policy than the file asked for, so "which files parse" is a
- * security-relevant answer, not a convenience.
+ * there must load here, and a file that failed there must fail here.
+ *
+ * A map that fails to load is treated as no map at all. That is safe by
+ * construction rather than by convention: the map only ever adds principals
+ * to an account, so the policy with no map is already the narrow one, and
+ * losing the file can only withdraw the extra principals it granted.
  *
  * Accepted:
  *
@@ -43,10 +44,9 @@
 typedef struct {
     char principals[SSOOSSH_MAX_MAP_PRINCIPALS][SSOOSSH_MAX_PRINCIPAL_LEN];
     size_t count;
-    /* Whether the account appeared in the file at all. An account with no
-     * entry is never allowed, even if a certificate principal happens to
-     * match its name -- the exact-match fallback is the caller's job, and
-     * only when no map applies. */
+    /* Whether the account appeared in the file at all. This says only
+     * whether the map has anything to add for it; the account's own name is
+     * always accepted, and that test is the caller's, on every path. */
     bool found;
 } ssoossh_principals;
 

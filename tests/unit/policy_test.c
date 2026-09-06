@@ -239,8 +239,9 @@ int suite_checks(void)
         T_CHECK(!ssoossh_check_principal(&cert, "ali", ""));
     }
 
-    /* Check 3, with a map -- including the fallback that is the whole
-     * reason the map's failure mode matters. */
+    /* Check 3, with a map. The map only ever adds principals to an
+     * account, so every case here is the exact match plus whatever the map
+     * grants -- never less. */
     if (cert_of("cert_ca_ecdsa384.cert", scratch, sizeof(scratch), &cert)) {
         char path[] = "/tmp/ssoossh-map-XXXXXX";
         int fd = mkstemp(path);
@@ -249,23 +250,36 @@ int suite_checks(void)
             FILE *f = fdopen(fd, "w");
             if (f != NULL) {
                 /* deploy is authorized by the certificate's "ops"
-                 * principal, which is not the account name. */
-                (void)fputs("deploy:\n  - ops\nnobody:\n  - someone\n", f);
+                 * principal, which is not the account name. locked is
+                 * listed with nothing, which grants nothing extra. */
+                (void)fputs("deploy:\n  - ops\nnobody:\n  - someone\n"
+                            "locked:\n",
+                            f);
                 (void)fclose(f);
 
+                /* The map grants a principal that is not the account
+                 * name. */
                 T_CHECK(ssoossh_check_principal(&cert, "deploy", path));
+                /* And grants nothing the certificate does not carry. */
                 T_CHECK(!ssoossh_check_principal(&cert, "nobody", path));
-                /* An account absent from a map that loaded is refused,
-                 * even though the certificate names it: the map is the
-                 * policy once it applies. */
-                T_CHECK(!ssoossh_check_principal(&cert, "alice", path));
+                /* An account the map never mentions still matches its own
+                 * name: the map adds, it does not gate. */
+                T_CHECK(ssoossh_check_principal(&cert, "alice", path));
+                /* An account listed with an empty list is the same as an
+                 * account that is absent -- it adds nothing, and it is not
+                 * a way to lock the account out. Here the certificate
+                 * carries no "locked" principal, so it is refused on the
+                 * exact match, not by the entry. */
+                T_CHECK(!ssoossh_check_principal(&cert, "locked", path));
             }
             (void)unlink(path);
         }
 
-        /* A map that is configured and unloadable falls back to the exact
-         * match rather than failing the login: a typo'd path degrades to
-         * the stricter default instead of locking every account out. */
+        /* A map that cannot be read leaves exactly the policy that applies
+         * with no map at all. Since the map can only ever add, losing it
+         * can only ever withdraw an extra way in -- these two assertions
+         * match the no-map block above, which is the property that makes
+         * the failure safe. */
         T_CHECK(ssoossh_check_principal(&cert, "alice",
                                         "/nonexistent/principals.yaml"));
         T_CHECK(!ssoossh_check_principal(&cert, "deploy",

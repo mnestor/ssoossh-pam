@@ -81,7 +81,7 @@ Every argument, every return code and the principals-map grammar are in
 | --- | --- | --- |
 | `server` | — | required; a missing scheme becomes `https://` |
 | `trusted-ca-file` | — | required; `authorized_keys` format, one CA per line |
-| `principals-map` | unset | which principals may assume which account |
+| `principals-map` | unset | extra principals that may assume an account |
 | `mode` | `auto` | `auto`, `sudo`, or `console` |
 | `skew-tolerance` | `2s` | applied to both ends of the validity window |
 | `timeout` | `60s` | bounds the whole attempt |
