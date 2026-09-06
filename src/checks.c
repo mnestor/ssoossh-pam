@@ -82,11 +82,16 @@ bool ssoossh_check_ca_signature(const ssoossh_cert *cert,
          * CA" would send an operator looking at their CA file when the
          * problem is that this build cannot verify that algorithm -- or,
          * for ssh-rsa, will not. */
+        /* The crypto version is named rather than a cause guessed at: it
+         * is the one string that knows what this host's backend actually
+         * has. Reciting every backend's possible reason told an operator
+         * about a platform they were not running on. */
         ssoossh_errf("certificate signature algorithm %s cannot be verified "
-                     "by this build (signature key %s): ssh-rsa means RSA "
-                     "with SHA-1 and is refused by policy; ssh-ed25519 is "
-                     "unavailable on the macOS backend",
-                     cert->signature_algo, cert_fp);
+                     "by this build (signature key %s, crypto %s): ssh-rsa "
+                     "means RSA with SHA-1 and is refused by policy; any "
+                     "other algorithm here is one this host's crypto does "
+                     "not provide",
+                     cert->signature_algo, cert_fp, ssoossh_crypto_version());
         return false;
     }
 

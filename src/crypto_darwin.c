@@ -61,6 +61,7 @@
 #include <string.h>
 
 #include "crypto.h"
+#include "crypto_common.h"
 #include "der.h"
 #include "ed25519_kat.h"
 #include "log.h"
@@ -255,7 +256,7 @@ static void ed25519_init(void)
     ssoossh_debugf("Ed25519: Security.framework SPI resolved and self-tested");
 }
 
-static bool ed25519_usable(void)
+bool ssoossh_crypto_ed25519_usable(void)
 {
     (void)pthread_once(&ed25519_once, ed25519_init);
     return ed25519_ok;
@@ -368,19 +369,6 @@ bool ssoossh_crypto_public_point(const ssoossh_keypair *kp, uint8_t *out,
     return true;
 }
 
-bool ssoossh_crypto_supports_key(const char *key_algo)
-{
-    /* ssh-ed25519 is conditional on this host, and the condition is
-     * decided once, by the resolve-and-self-test above. */
-    if (strcmp(key_algo, "ssh-ed25519") == 0) {
-        return ed25519_usable();
-    }
-    return strcmp(key_algo, "ssh-rsa") == 0 ||
-           strcmp(key_algo, "ecdsa-sha2-nistp256") == 0 ||
-           strcmp(key_algo, "ecdsa-sha2-nistp384") == 0 ||
-           strcmp(key_algo, "ecdsa-sha2-nistp521") == 0;
-}
-
 /* Builds a SecKeyRef from an SSH public key blob.
  *
  * SecKeyCreateWithData takes the raw key material, not a
@@ -392,8 +380,8 @@ static SecKeyRef key_from_ssh_blob(const uint8_t *blob, size_t blob_len,
                                    uint8_t *scratch, size_t scratch_cap)
 {
     ssh_rd r;
-    const uint8_t *type = NULL, *a = NULL, *b = NULL;
-    size_t type_len = 0, a_len = 0, b_len = 0;
+    const uint8_t *a = NULL, *b = NULL;
+    size_t a_len = 0, b_len = 0;
     CFMutableDictionaryRef attrs;
     CFDataRef material = NULL;
     SecKeyRef key = NULL;
@@ -401,12 +389,9 @@ static SecKeyRef key_from_ssh_blob(const uint8_t *blob, size_t blob_len,
     int size_in_bits = 0;
 
     ssh_rd_init(&r, blob, blob_len);
-    if (!ssh_rd_str(&r, &type, &type_len) || type_len == 0 ||
-        type_len >= type_cap) {
+    if (!ssh_rd_cstr(&r, type_out, type_cap)) {
         return NULL;
     }
-    memcpy(type_out, type, type_len);
-    type_out[type_len] = '\0';
 
     if (strcmp(type_out, "ssh-ed25519") == 0) {
         /* One string: the 32-byte point. The SPI path builds its own
@@ -415,7 +400,7 @@ static SecKeyRef key_from_ssh_blob(const uint8_t *blob, size_t blob_len,
         if (!ssh_rd_str(&r, &a, &a_len) || !ssh_rd_done(&r) || a_len != 32) {
             return NULL;
         }
-        if (!ed25519_usable()) {
+        if (!ssoossh_crypto_ed25519_usable()) {
             return NULL;
         }
         return ed25519_key(a, a_len);
@@ -508,40 +493,25 @@ static SecKeyRef key_from_ssh_blob(const uint8_t *blob, size_t blob_len,
 static bool sig_algo_info(const char *sig_algo, const char **key_type,
                           SecKeyAlgorithm *algorithm)
 {
+    *key_type = ssoossh_sig_algo_key_type(sig_algo);
+    if (*key_type == NULL) {
+        return false;
+    }
     if (strcmp(sig_algo, "ssh-ed25519") == 0) {
-        if (!ed25519_usable()) {
-            return false;
-        }
-        *key_type = "ssh-ed25519";
         *algorithm = ed25519_algorithm;
-        return true;
-    }
-    if (strcmp(sig_algo, "rsa-sha2-256") == 0) {
-        *key_type = "ssh-rsa";
+    } else if (strcmp(sig_algo, "rsa-sha2-256") == 0) {
         *algorithm = kSecKeyAlgorithmRSASignatureMessagePKCS1v15SHA256;
-        return true;
-    }
-    if (strcmp(sig_algo, "rsa-sha2-512") == 0) {
-        *key_type = "ssh-rsa";
+    } else if (strcmp(sig_algo, "rsa-sha2-512") == 0) {
         *algorithm = kSecKeyAlgorithmRSASignatureMessagePKCS1v15SHA512;
-        return true;
-    }
-    if (strcmp(sig_algo, "ecdsa-sha2-nistp256") == 0) {
-        *key_type = "ecdsa-sha2-nistp256";
+    } else if (strcmp(sig_algo, "ecdsa-sha2-nistp256") == 0) {
         *algorithm = kSecKeyAlgorithmECDSASignatureMessageX962SHA256;
-        return true;
-    }
-    if (strcmp(sig_algo, "ecdsa-sha2-nistp384") == 0) {
-        *key_type = "ecdsa-sha2-nistp384";
+    } else if (strcmp(sig_algo, "ecdsa-sha2-nistp384") == 0) {
         *algorithm = kSecKeyAlgorithmECDSASignatureMessageX962SHA384;
-        return true;
-    }
-    if (strcmp(sig_algo, "ecdsa-sha2-nistp521") == 0) {
-        *key_type = "ecdsa-sha2-nistp521";
+    } else {
+        /* ecdsa-sha2-nistp521, the only name left that the table admits. */
         *algorithm = kSecKeyAlgorithmECDSASignatureMessageX962SHA512;
-        return true;
     }
-    return false;
+    return true;
 }
 
 ssoossh_verify_result ssoossh_crypto_verify(const char *sig_algo,
@@ -580,15 +550,10 @@ ssoossh_verify_result ssoossh_crypto_verify(const char *sig_algo,
     /* ECDSA signatures arrive as two mpints; the X962 algorithms want an
      * ECDSA-Sig-Value, the same DER OpenSSL asks for. */
     if (strncmp(sig_algo, "ecdsa-", 6) == 0) {
-        ssh_rd sr;
-        const uint8_t *rr = NULL, *ss = NULL;
-        size_t r_len = 0, s_len = 0, n = 0;
+        size_t n = 0;
 
-        ssh_rd_init(&sr, sig, sig_len);
-        if (!ssh_rd_str(&sr, &rr, &r_len) || !ssh_rd_str(&sr, &ss, &s_len) ||
-            !ssh_rd_done(&sr) ||
-            !ssoossh_der_ecdsa_sig(rr, r_len, ss, s_len, der_sig,
-                                   sizeof(der_sig), &n)) {
+        if (!ssoossh_ecdsa_sig_to_der(sig, sig_len, der_sig, sizeof(der_sig),
+                                      &n)) {
             CFRelease(key);
             return SSOOSSH_VERIFY_ERROR;
         }
@@ -649,6 +614,6 @@ const char *ssoossh_crypto_version(void)
      * CA: this line is the drift signal, and "which Macs lost Ed25519
      * after the update" has to be a grep of syslog before an Ed25519 CA
      * appears, not after. It is three verifies, once per process. */
-    (void)ed25519_usable();
+    (void)ssoossh_crypto_ed25519_usable();
     return ed25519_version;
 }
