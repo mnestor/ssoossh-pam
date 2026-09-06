@@ -110,8 +110,12 @@ jobs:
   # to run them without cutting a release. Console mode is not compiled
   # into the macOS build.
   #
-  # src/crypto_darwin.c is the file this job exists for; it has been built
-  # and exercised by hand on Apple silicon, not yet on a hosted runner.
+  # src/crypto_darwin.c is the file this job exists for. It is built and
+  # gated on every release now, so what is left for this job is the floor:
+  # release.yml targets macOS 15 from a macOS 26 runner, and this one is
+  # where the module is actually loaded and run on 15. It is also how an
+  # unmerged branch gets a macOS answer before it is tagged -- reach for it
+  # whenever that file changes, because no Linux build compiles it.
   macos:
     name: macos (sequoia, arm64)
     if: ${{ inputs.job == 'both' || inputs.job == 'macos' }}

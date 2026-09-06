@@ -288,8 +288,8 @@ ships.
 What has been run, and what has not, stated plainly.
 
 **Verified on Linux (glibc and musl, and the RHEL 8 floor):** the build, the
-symbol and load gates, 15 unit suites, the same suites under ASan and UBSan,
-five libFuzzer targets over every parser that reads network bytes, and 23
+symbol and load gates, 18 unit suites, the same suites under ASan and UBSan,
+five libFuzzer targets over every parser that reads network bytes, and 25
 end-to-end scenarios through a real PAM stack against a stub `ssoosshd` —
 including the approval, a denial, an expiry, a mid-stream drop and reconnect,
 a retryable refusal, a timeout, a certificate for the wrong key, a
@@ -306,16 +306,31 @@ divergences remain and both are intended: Ctrl-C returns `PAM_IGNORE` here
 and `PAM_AUTH_ERR` there, and an `ssh-rsa` (SHA-1) certificate is refused
 here and accepted there.
 
-**Not verified:** a run against a production `ssoosshd`; FreeBSD, whose
-Makefile branch exists but has never been compiled, let alone executed;
-macOS on a hosted runner, which has been built and run by hand on Apple
-silicon but not yet in CI; and console mode against the real server
-endpoints, which exist in the monorepo but have only been driven from a
-stub written against them.
+**Verified on FreeBSD and macOS in the release pipeline:** every tagged
+build puts both through the same gates. FreeBSD 14 builds in a VM and runs
+the unit suites, the stdio and size gates, and the end-to-end suite. macOS
+builds on a hosted macOS 26 runner for a deployment floor of 15 and runs
+those same gates plus `make check-apple-spi`, which puts the Ed25519 SecKey
+SPI through its known-answer self-test against the running system rather
+than only checking that the SDK still exports it;
+[`cross-platform.yml`](.github/workflows/cross-platform.yml) runs the gates
+again on macos-15, which is where the floor itself is checked. `v1.0.0`
+shipped signed artifacts for both — the macOS installer notarized — and
+macOS has additionally been tested by hand on Apple silicon.
 
-[`docs/porting.md`](docs/porting.md) is the sequence for building and
-testing on those two by hand — what to install, what to run, what is most
-likely to break first, and how Ed25519 on macOS is kept honest.
+Linux is the only one of the three that CI runs on **every** commit; the
+other two are gated at release time and on demand. A change to
+`src/crypto_darwin.c` is therefore unverified until a macOS job has had it,
+because the Makefile compiles exactly one crypto backend and a green Linux
+build says nothing about the other.
+
+**Not verified:** a run against a production `ssoosshd`, and console mode
+against the real server endpoints, which exist in the monorepo but have only
+been driven from a stub written against them.
+
+[`docs/porting.md`](docs/porting.md) is the sequence for driving FreeBSD and
+macOS by hand — what to install, what to run, what is most likely to break
+first, and how Ed25519 on macOS is kept honest.
 
 ## Releases
 

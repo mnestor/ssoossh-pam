@@ -1,14 +1,22 @@
 # Building and testing on FreeBSD and macOS
 
-**FreeBSD has never been compiled.** Its Makefile branch is written and has
-not been near a machine that could run it. macOS has been built and run by
-hand on Apple silicon — the `ld64` symbol list, `src/crypto_darwin.c`, the
-e2e suite — but not yet on a hosted runner. This document is the sequence
-to follow the first time on each, what is likely to break, and how to tell
-a real problem from an assumption that was simply wrong.
+**Both are built and gated in the release pipeline.** Every tagged build
+runs the unit suites, the stdio and size gates and the end-to-end suite on
+FreeBSD 14 in a VM and on a hosted macOS 26 runner, and the macOS job
+additionally runs `make check-apple-spi` — the Ed25519 SecKey SPI put
+through its known-answer self-test against the running system. `v1.0.0`
+shipped artifacts for both, the macOS installer signed and notarized, and
+macOS has been tested by hand on Apple silicon as well.
 
-Everything on Linux — glibc, musl, and the RHEL 8 floor — is verified. These
-two are not to the same degree.
+This document is the sequence for driving either by hand: what to install,
+what to run, what is likely to break, and how to tell a real problem from an
+assumption that was simply wrong.
+
+What the pipeline does not give you is per-commit cover. Linux runs on every
+push; these two run at release time and on demand. The Makefile compiles
+exactly one crypto backend, so a green Linux build says nothing at all about
+`src/crypto_darwin.c` — an edit there is unverified until a macOS job has
+had it, and running one is the point of the workflow below.
 
 The same sequence runs unattended in
 [`.github/workflows/cross-platform.yml`](../.github/workflows/cross-platform.yml),
@@ -101,10 +109,10 @@ not a correct reference to compare against on OpenPAM. It would report
 
 ### Installing it for real
 
-macOS ships no artifact and `make install` finds no module directory,
-because `/usr/lib/pam` is protected by System Integrity Protection. To use
-the module on a Mac anyway, give it a root-owned directory of its own and
-name it by absolute path:
+The release ships a signed `.pkg`, but `make install` finds no module
+directory, because `/usr/lib/pam` is protected by System Integrity
+Protection. To install from a source tree, give the module a root-owned
+directory of its own and name it by absolute path:
 
 ```console
 $ sudo make install SECURITYDIR=/usr/local/lib/pam
@@ -252,12 +260,13 @@ $ log stream --predicate 'eventMessage CONTAINS "pam_ssoossh"' --style compact
 ### What is most likely to break, and why
 
 1. **`src/crypto_darwin.c` does not compile.** This is the file the macOS job
-   exists for and the one most likely to fail first. It is written against
-   the documented Security.framework API and has never been through a
-   compiler. Expect argument-type mismatches, a `CFNumberRef` where a
-   `CFTypeRef` was wanted, and `-Wconversion` complaints on `CFIndex`.
-   Everything above `src/crypto.h` is platform-neutral and already verified,
-   so a failure here is contained to one file.
+   exists for and still the one most likely to fail first — not because it
+   is unproven any more, but because it is the only file a Linux build never
+   sees. Expect argument-type mismatches, a `CFNumberRef` where a
+   `CFTypeRef` was wanted, and `-Wconversion` complaints on `CFIndex`, and
+   expect them from whatever was changed since the last green macOS run.
+   Everything above `src/crypto.h` is platform-neutral and covered by CI, so
+   a failure here is contained to one file.
 
 2. **`SecKeyCreateRandomKey` refuses to generate.** The key is deliberately
    not persisted — `kSecAttrIsPermanent: false` inside `kSecPrivateKeyAttrs`
@@ -467,12 +476,19 @@ reach CryptoKit at all, and there is no Swift-to-C path.
 
 ## Turning these on in CI
 
-Once both pass, move the jobs into
-[`ci.yml`](../.github/workflows/ci.yml) so a failure interrupts, and delete
-`cross-platform.yml`. Until then they stay behind `workflow_dispatch`:
-running them on every commit would produce failures nobody is ready to act
-on, on platforms nobody is working on yet.
+Both now pass, and both are wired into
+[`release.yml`](../.github/workflows/release.yml) rather than
+[`ci.yml`](../.github/workflows/ci.yml): a tagged build cannot publish
+without them, which is the failure that had to become interrupting. They
+are not on every push, because a hosted Mac and a FreeBSD VM per commit buy
+little on a tree whose platform-neutral half CI already covers.
 
-Update the "Verified, and not" section of the [README](../README.md) at the
-same time. It currently says these platforms have never been compiled, and
-that should stop being true in the same commit that makes it untrue.
+`cross-platform.yml` stays for the two things the release job cannot do:
+running the gates on macos-15, where the deployment floor is actually
+checked rather than merely targeted, and giving an unmerged branch a macOS
+answer before it is tagged. Reach for it whenever you touch
+`src/crypto_darwin.c`.
+
+The "Verified, and not" section of the [README](../README.md) is kept in
+step with all of this; if you change what a platform job proves, change that
+section in the same commit.

@@ -27,9 +27,9 @@ That is the whole reason this dependency exists: the alternative is writing
 server-supplied bytes to a terminal owned by a root process, which is the
 one thing `src/conv.c` is built to prevent.
 
-Compiled on Linux and FreeBSD only. macOS ships no artifact and console mode
-is not compiled into it, so the Makefile leaves this out of that build
-entirely.
+Compiled on Linux and FreeBSD only. A Mac's console login is loginwindow,
+which never shows a PAM message, so console mode is not compiled into that
+build and the Makefile leaves this out of it entirely.
 
 ## Updating
 
