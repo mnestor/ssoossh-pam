@@ -54,7 +54,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
             }
             off += take;
         }
-        ssoossh_sse_end(s);
+        ssoossh_sse_init(s);
     }
 
     free(s);

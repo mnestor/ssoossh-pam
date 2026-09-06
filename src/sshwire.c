@@ -68,6 +68,19 @@ bool ssh_rd_str(ssh_rd *r, const uint8_t **out, size_t *out_len)
     return true;
 }
 
+bool ssh_rd_cstr(ssh_rd *r, char *out, size_t out_cap)
+{
+    const uint8_t *p = NULL;
+    size_t n = 0;
+
+    if (!ssh_rd_str(r, &p, &n) || n == 0 || n >= out_cap) {
+        return false;
+    }
+    memcpy(out, p, n);
+    out[n] = '\0';
+    return true;
+}
+
 bool ssh_rd_skip_str(ssh_rd *r)
 {
     return ssh_rd_str(r, NULL, NULL);

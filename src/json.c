@@ -104,29 +104,32 @@ static bool unescape(const char *p, size_t len, char *out, size_t out_cap)
         if (++i >= len) {
             return false;
         }
+        /* Every escape but \u writes exactly one byte, so one check covers
+         * them all; \u does its own, per code point. */
+        if (p[i] != 'u' && w + 1 >= out_cap) {
+            return false;
+        }
         switch (p[i]) {
         case '"':
         case '\\':
         case '/':
-            if (w + 1 >= out_cap) {
-                return false;
-            }
             out[w++] = p[i];
             break;
         case 'b':
-        case 'f':
-        case 'n':
-        case 'r':
-        case 't': {
-            static const char from[] = "bfnrt";
-            static const char to[] = "\b\f\n\r\t";
-            const char *at = strchr(from, p[i]);
-            if (w + 1 >= out_cap) {
-                return false;
-            }
-            out[w++] = to[at - from];
+            out[w++] = '\b';
             break;
-        }
+        case 'f':
+            out[w++] = '\f';
+            break;
+        case 'n':
+            out[w++] = '\n';
+            break;
+        case 'r':
+            out[w++] = '\r';
+            break;
+        case 't':
+            out[w++] = '\t';
+            break;
         case 'u': {
             uint32_t cp;
 
@@ -260,28 +263,39 @@ bool ssoossh_json_top_string(const char *body, size_t body_len,
     return get_string(body, body_len, NULL, field, out, out_cap);
 }
 
-bool ssoossh_json_append(char *buf, size_t cap, size_t *len, const char *raw)
+void ssoossh_json_wr_init(ssoossh_json_wr *w, char *buf, size_t cap)
+{
+    w->buf = buf;
+    w->cap = cap;
+    w->len = 0;
+    w->bad = false;
+    if (cap > 0) {
+        buf[0] = '\0';
+    }
+}
+
+void ssoossh_json_append(ssoossh_json_wr *w, const char *raw)
 {
     size_t n = strlen(raw);
 
-    if (*len + n + 1 > cap) {
-        return false;
+    if (w->bad || w->len + n + 1 > w->cap) {
+        w->bad = true;
+        return;
     }
-    memcpy(buf + *len, raw, n);
-    *len += n;
-    buf[*len] = '\0';
-    return true;
+    memcpy(w->buf + w->len, raw, n);
+    w->len += n;
+    w->buf[w->len] = '\0';
 }
 
-bool ssoossh_json_append_string(char *buf, size_t cap, size_t *len,
-                                const char *s)
+void ssoossh_json_append_string(ssoossh_json_wr *w, const char *s)
 {
-    size_t w = *len;
+    size_t at = w->len;
 
-    if (w + 1 >= cap) {
-        return false;
+    if (w->bad || at + 1 >= w->cap) {
+        w->bad = true;
+        return;
     }
-    buf[w++] = '"';
+    w->buf[at++] = '"';
 
     for (size_t i = 0; s[i] != '\0'; i++) {
         unsigned char c = (unsigned char)s[i];
@@ -315,20 +329,26 @@ bool ssoossh_json_append_string(char *buf, size_t cap, size_t *len,
             n = 1;
         }
 
-        if (w + n + 2 > cap) {
-            return false;
+        if (at + n + 2 > w->cap) {
+            w->bad = true;
+            return;
         }
-        memcpy(buf + w, esc, n);
-        w += n;
+        memcpy(w->buf + at, esc, n);
+        at += n;
     }
 
-    if (w + 2 > cap) {
-        return false;
+    if (at + 2 > w->cap) {
+        w->bad = true;
+        return;
     }
-    buf[w++] = '"';
-    buf[w] = '\0';
-    *len = w;
-    return true;
+    w->buf[at++] = '"';
+    w->buf[at] = '\0';
+    w->len = at;
+}
+
+bool ssoossh_json_wr_ok(const ssoossh_json_wr *w)
+{
+    return !w->bad;
 }
 
 /* days_from_civil, the standard proleptic-Gregorian conversion. timegm is

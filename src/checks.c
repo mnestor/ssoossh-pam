@@ -10,6 +10,20 @@
 /* Renders the certificate's principals for a log line: alice,ops. Bounded
  * and truncated with an ellipsis rather than growing, because this is a
  * message and not a decision. */
+/* An RFC 3339 instant for a debug line. A clock the C library cannot break
+ * down renders as "?" rather than costing the caller an error path in the
+ * middle of a message. */
+static void utc_string(int64_t t, char out[32])
+{
+    time_t tt = (time_t)t;
+    struct tm tm;
+
+    if (gmtime_r(&tt, &tm) == NULL ||
+        strftime(out, 32, "%Y-%m-%dT%H:%M:%SZ", &tm) == 0) {
+        (void)snprintf(out, 32, "?");
+    }
+}
+
 static void principals_string(const ssoossh_cert *cert, char *out,
                               size_t out_cap)
 {
@@ -206,20 +220,9 @@ bool ssoossh_check_validity(const ssoossh_cert *cert, int64_t now,
 
     {
         char after_s[32], before_s[32];
-        struct tm tm;
-        time_t a = (time_t)after, b = (time_t)before;
 
-        if (gmtime_r(&a, &tm) != NULL) {
-            (void)strftime(after_s, sizeof(after_s), "%Y-%m-%dT%H:%M:%SZ", &tm);
-        } else {
-            (void)snprintf(after_s, sizeof(after_s), "?");
-        }
-        if (gmtime_r(&b, &tm) != NULL) {
-            (void)strftime(before_s, sizeof(before_s), "%Y-%m-%dT%H:%M:%SZ",
-                           &tm);
-        } else {
-            (void)snprintf(before_s, sizeof(before_s), "?");
-        }
+        utc_string(after, after_s);
+        utc_string(before, before_s);
         ssoossh_debugf("check 4/4 validity window: now is within [%s, %s] "
                        "(tolerance %s, %llds remaining)",
                        after_s, before_s, tol, (long long)(before - now));

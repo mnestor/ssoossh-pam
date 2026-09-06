@@ -81,14 +81,53 @@ typedef struct {
     bool have;
 } wait_ctx;
 
-/* Every status that resolves a request. Recognizing fewer than the full set
- * means an unlisted one arrives as an informational event and the wait
- * blocks forever on a terminal one that never comes. */
+/* Every status that resolves a request, and what to tell the operator when
+ * it is not the approval.
+ *
+ * Recognizing fewer than the full set means an unlisted status arrives as
+ * an informational event and the wait blocks forever on a terminal one that
+ * never comes. Explaining fewer than the full set means a status this
+ * module does know is reported as one it has never heard of. Both lists
+ * were written out separately once, and the second had fallen behind; one
+ * table is how they cannot. */
+static const struct {
+    const char *name;
+    const char *failure; /* NULL for the status that is a success */
+} terminal_status[] = {
+    {"approved", NULL},
+    {"denied", "the request was denied"},
+    {"expired", "the request expired before anyone approved it"},
+    {"enrolled", "the request resolved as an enrollment, which carries no "
+                 "certificate for this login"},
+    /* The caller answers this one with PAM_AUTH_ERR rather than
+     * PAM_AUTHINFO_UNAVAIL: the request reached ssoosshd and was processed,
+     * so it is a definitive no from a reachable server, not a connectivity
+     * problem. */
+    {"failed", "ssoosshd could not issue the certificate"},
+};
+
+#define TERMINAL_COUNT (sizeof(terminal_status) / sizeof(terminal_status[0]))
+
+/* The failure message for a terminal status, or NULL for one this module
+ * has never heard of. */
+static const char *terminal_failure(const char *name)
+{
+    for (size_t i = 0; i < TERMINAL_COUNT; i++) {
+        if (strcmp(name, terminal_status[i].name) == 0) {
+            return terminal_status[i].failure;
+        }
+    }
+    return NULL;
+}
+
 static bool is_terminal(const char *name)
 {
-    return strcmp(name, "approved") == 0 || strcmp(name, "denied") == 0 ||
-           strcmp(name, "expired") == 0 || strcmp(name, "enrolled") == 0 ||
-           strcmp(name, "failed") == 0;
+    for (size_t i = 0; i < TERMINAL_COUNT; i++) {
+        if (strcmp(name, terminal_status[i].name) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool on_event(const char *name, const char *data, size_t data_len,
@@ -129,26 +168,24 @@ static const char *mode_name(ssoossh_mode mode)
 /* One optional string field: ",\"name\":\"value\"", or nothing at all when
  * the value is empty. That is encoding/json's omitempty, and the wire is a
  * contract: the server distinguishes "not sent" from "sent empty". */
-static bool append_opt(attempt *a, size_t *len, const char *name,
-                       const char *value)
+static void append_opt(ssoossh_json_wr *w, const char *name, const char *value)
 {
     if (value[0] == '\0') {
-        return true;
+        return;
     }
-    return ssoossh_json_append(a->body, sizeof(a->body), len, ",\"") &&
-           ssoossh_json_append(a->body, sizeof(a->body), len, name) &&
-           ssoossh_json_append(a->body, sizeof(a->body), len, "\":") &&
-           ssoossh_json_append_string(a->body, sizeof(a->body), len, value);
+    ssoossh_json_append(w, ",\"");
+    ssoossh_json_append(w, name);
+    ssoossh_json_append(w, "\":");
+    ssoossh_json_append_string(w, value);
 }
 
 /* A JSON integer field, always sent. */
-static bool append_int(attempt *a, size_t *len, const char *name,
-                       long long value)
+static void append_int(ssoossh_json_wr *w, const char *name, long long value)
 {
     char text[64];
 
     (void)snprintf(text, sizeof(text), ",\"%s\":%lld", name, value);
-    return ssoossh_json_append(a->body, sizeof(a->body), len, text);
+    ssoossh_json_append(w, text);
 }
 
 /* Builds the create-request body, the same shape for /api/certs/pam and
@@ -168,71 +205,61 @@ static bool build_body(attempt *a, const char *user, const char *public_key,
     char addrs[SSOOSSH_MAX_LOCAL_ADDRS][SSOOSSH_ADDR_LEN];
     size_t n_addrs = ssoossh_local_addresses(addrs, SSOOSSH_MAX_LOCAL_ADDRS);
     ssoossh_host_info host;
-    size_t len = 0;
-    bool ok = true;
+    ssoossh_json_wr w;
 
     ssoossh_host_info_read(&host);
+    ssoossh_json_wr_init(&w, a->body, sizeof(a->body));
 
-    ok = ok && ssoossh_json_append(a->body, sizeof(a->body), &len,
-                                   "{\"public_key\":");
-    ok = ok &&
-         ssoossh_json_append_string(a->body, sizeof(a->body), &len, public_key);
-    ok = ok &&
-         ssoossh_json_append(a->body, sizeof(a->body), &len, ",\"username\":");
-    ok = ok && ssoossh_json_append_string(a->body, sizeof(a->body), &len, user);
+    ssoossh_json_append(&w, "{\"public_key\":");
+    ssoossh_json_append_string(&w, public_key);
+    ssoossh_json_append(&w, ",\"username\":");
+    ssoossh_json_append_string(&w, user);
 
-    ok = ok && append_opt(a, &len, "hostname", ctx->hostname);
-    ok = ok && append_opt(a, &len, "pam_service", ctx->service);
-    ok = ok && append_opt(a, &len, "tty", ctx->tty);
-    ok = ok && append_opt(a, &len, "remote_host", ctx->rhost);
-    ok = ok && append_opt(a, &len, "requesting_user", ctx->ruser);
-    ok = ok && append_opt(a, &len, "process", host.process);
-    ok = ok && append_int(a, &len, "caller_uid", (long long)getuid());
-    ok = ok && append_int(a, &len, "caller_pid", (long long)getpid());
-    ok = ok && append_int(a, &len, "caller_ppid", (long long)getppid());
-    ok = ok && append_opt(a, &len, "machine_id", host.machine_id);
-    ok = ok && append_opt(a, &len, "os", host.os);
-    ok = ok &&
-         append_opt(a, &len, "client", "pam_ssoossh-c/" PAM_SSOOSSH_VERSION);
-    ok = ok && append_opt(a, &len, "mode", mode_name(cfg->mode));
-    ok = ok && append_opt(a, &len, "client_time", host.client_time);
+    append_opt(&w, "hostname", ctx->hostname);
+    append_opt(&w, "pam_service", ctx->service);
+    append_opt(&w, "tty", ctx->tty);
+    append_opt(&w, "remote_host", ctx->rhost);
+    append_opt(&w, "requesting_user", ctx->ruser);
+    append_opt(&w, "process", host.process);
+    append_int(&w, "caller_uid", (long long)getuid());
+    append_int(&w, "caller_pid", (long long)getpid());
+    append_int(&w, "caller_ppid", (long long)getppid());
+    append_opt(&w, "machine_id", host.machine_id);
+    append_opt(&w, "os", host.os);
+    append_opt(&w, "client", "pam_ssoossh-c/" PAM_SSOOSSH_VERSION);
+    append_opt(&w, "mode", mode_name(cfg->mode));
+    append_opt(&w, "client_time", host.client_time);
 
     /* Which CAs this host would accept a certificate from, so the approver
      * can see a host still trusting a CA that was meant to be retired. At
      * most eight: a trusted-ca-file with more than that is a rotation gone
      * wrong, and the first eight say so. */
-    ok = ok && ssoossh_json_append(a->body, sizeof(a->body), &len,
-                                   ",\"trusted_ca_fingerprints\":[");
+    ssoossh_json_append(&w, ",\"trusted_ca_fingerprints\":[");
     for (size_t i = 0; i < a->cas.count && i < 8; i++) {
         char fp[SSOOSSH_FINGERPRINT_LEN];
 
         ssoossh_sshkey_fingerprint(a->cas.keys[i].blob, a->cas.keys[i].len, fp);
         if (i > 0) {
-            ok = ok && ssoossh_json_append(a->body, sizeof(a->body), &len, ",");
+            ssoossh_json_append(&w, ",");
         }
-        ok = ok &&
-             ssoossh_json_append_string(a->body, sizeof(a->body), &len, fp);
+        ssoossh_json_append_string(&w, fp);
     }
-    ok = ok && ssoossh_json_append(a->body, sizeof(a->body), &len, "]");
+    ssoossh_json_append(&w, "]");
 
-    ok = ok && ssoossh_json_append(a->body, sizeof(a->body), &len,
-                                   ",\"requested_options\":{");
+    ssoossh_json_append(&w, ",\"requested_options\":{");
     if (n_addrs > 0) {
-        ok = ok && ssoossh_json_append(a->body, sizeof(a->body), &len,
-                                       "\"source_addresses\":[");
+        ssoossh_json_append(&w, "\"source_addresses\":[");
         for (size_t i = 0; i < n_addrs; i++) {
             if (i > 0) {
-                ok = ok &&
-                     ssoossh_json_append(a->body, sizeof(a->body), &len, ",");
+                ssoossh_json_append(&w, ",");
             }
-            ok = ok && ssoossh_json_append_string(a->body, sizeof(a->body),
-                                                  &len, addrs[i]);
+            ssoossh_json_append_string(&w, addrs[i]);
         }
-        ok = ok && ssoossh_json_append(a->body, sizeof(a->body), &len, "]");
+        ssoossh_json_append(&w, "]");
     }
-    ok = ok && ssoossh_json_append(a->body, sizeof(a->body), &len, "}}");
+    ssoossh_json_append(&w, "}}");
 
-    return ok;
+    return ssoossh_json_wr_ok(&w);
 }
 
 /* Turns a failure of the HTTP exchange into the PAM code the stack sees.
@@ -693,18 +720,14 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
     }
 
     if (strcmp(wait.status, "approved") != 0) {
-        /* Every terminal status is handled by name. An unhandled one would
-         * otherwise fall through with no certificate and no error, which is
-         * exactly the nil-error-success bug the Go module had to fix. */
-        if (strcmp(wait.status, "denied") == 0) {
-            ssoossh_errf("the request was denied");
-        } else if (strcmp(wait.status, "expired") == 0) {
-            ssoossh_errf("the request expired before anyone approved it");
-        } else if (strcmp(wait.status, "failed") == 0) {
-            /* Deliberately not PAM_AUTHINFO_UNAVAIL: the request reached
-             * ssoosshd and was processed. This is a definitive no from a
-             * reachable server, not a connectivity problem. */
-            ssoossh_errf("ssoosshd could not issue the certificate");
+        /* Every terminal status is explained by name. An unexplained one
+         * would otherwise fall through with no certificate and no error,
+         * which is exactly the nil-error-success bug the Go module had to
+         * fix. */
+        const char *failure = terminal_failure(wait.status);
+
+        if (failure != NULL) {
+            ssoossh_errf("%s", failure);
         } else {
             ssoossh_errf("the server reported an unrecognized outcome \"%s\"",
                          wait.status);
@@ -770,9 +793,7 @@ done:
      * and so is everything derived from it, because the response buffer
      * held a certificate and the body held a public key. */
     ssoossh_crypto_keypair_free(kp);
-    if (a != NULL) {
-        ssoossh_crypto_wipe(a, sizeof(*a));
-        free(a);
-    }
+    ssoossh_crypto_wipe(a, sizeof(*a));
+    free(a);
     return rc;
 }

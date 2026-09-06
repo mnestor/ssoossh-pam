@@ -2,6 +2,10 @@
 
 #include <string.h>
 
+/* Also how a stream is ended: whatever is half-read is discarded, because
+ * an event is dispatched by a blank line and a connection that dropped
+ * mid-event never sent one -- so a trailing partial line is not an event
+ * that arrived, it is one that did not. */
 void ssoossh_sse_init(ssoossh_sse *s)
 {
     s->line_len = 0;
@@ -129,16 +133,4 @@ bool ssoossh_sse_feed(ssoossh_sse *s, const char *p, size_t n,
         s->line[s->line_len++] = c;
     }
     return true;
-}
-
-void ssoossh_sse_end(ssoossh_sse *s)
-{
-    /* Whatever is half-read is discarded. An event is dispatched by a blank
-     * line, and a connection that dropped mid-event never sent one -- so a
-     * trailing partial line is not an event that arrived, it is one that
-     * did not. */
-    s->line_len = 0;
-    s->name[0] = '\0';
-    s->data_len = 0;
-    s->have_event = false;
 }

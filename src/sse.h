@@ -64,9 +64,4 @@ void ssoossh_sse_init(ssoossh_sse *s);
 bool ssoossh_sse_feed(ssoossh_sse *s, const char *p, size_t n,
                       ssoossh_sse_cb cb, void *ctx);
 
-/* Ends the stream. A final line with no trailing newline is not
- * dispatched: an event is dispatched by a blank line, and a connection
- * that dropped mid-event has not delivered one. */
-void ssoossh_sse_end(ssoossh_sse *s);
-
 #endif /* PAM_SSOOSSH_SSE_H */

@@ -473,7 +473,7 @@ for s in "${scenarios[@]}"; do
     enrolled)
         # A terminal status that resolves a service enrollment and carries
         # no certificate a PAM login could use.
-        run enrolled enrolled 0 'unrecognized outcome' 15s '' ;;
+        run enrolled enrolled 0 'resolved as an enrollment' 15s '' ;;
     envelope-error)
         run envelope-error envelope-error 0 'the signer refused' 15s '' ;;
     no-cert)

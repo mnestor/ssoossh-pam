@@ -42,6 +42,13 @@ uint64_t ssh_rd_u64(ssh_rd *r);
  * hostile 0xffffffff takes. */
 bool ssh_rd_str(ssh_rd *r, const uint8_t **out, size_t *out_len);
 
+/* Reads a string into a NUL-terminated buffer, for the ones that are names
+ * rather than key material -- an algorithm, a curve. Empty is refused, and
+ * so is a name that does not fit: truncating one would make two names with
+ * a common prefix compare equal, which is a key claiming to be an algorithm
+ * it is not. */
+bool ssh_rd_cstr(ssh_rd *r, char *out, size_t out_cap);
+
 /* Skips a string without looking at it. */
 bool ssh_rd_skip_str(ssh_rd *r);
 

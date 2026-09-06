@@ -38,20 +38,31 @@ bool ssoossh_json_data_string(const char *body, size_t body_len,
 bool ssoossh_json_top_string(const char *body, size_t body_len,
                              const char *field, char *out, size_t out_cap);
 
-/* Appends a JSON string literal, quotes and escaping included, to a buffer
- * that *len bytes of are already used. Returns false when it does not fit,
- * leaving the buffer in whatever state it reached -- callers build a body
- * and check once at the end, never partially.
+/* The writing half, with the same latched-failure discipline as ssh_wr:
+ * overflow sets bad and every later write is dropped, so a caller builds a
+ * body and checks once at the end, never partially. A body that did not fit
+ * is never sent, so the half-written buffer is never read. */
+typedef struct {
+    char *buf;
+    size_t cap;
+    size_t len;
+    bool bad;
+} ssoossh_json_wr;
+
+void ssoossh_json_wr_init(ssoossh_json_wr *w, char *buf, size_t cap);
+
+/* Appends a JSON string literal, quotes and escaping included.
  *
  * Escapes what JSON requires and nothing else: a control byte becomes
  * \uXXXX, a quote and a backslash get a backslash. A forward slash is left
  * alone, because escaping it is optional and the Go encoder does not. */
-bool ssoossh_json_append_string(char *buf, size_t cap, size_t *len,
-                                const char *s);
+void ssoossh_json_append_string(ssoossh_json_wr *w, const char *s);
 
 /* Appends raw text -- punctuation, field names already quoted, a literal
  * true or null. */
-bool ssoossh_json_append(char *buf, size_t cap, size_t *len, const char *raw);
+void ssoossh_json_append(ssoossh_json_wr *w, const char *raw);
+
+bool ssoossh_json_wr_ok(const ssoossh_json_wr *w);
 
 /* Parses the RFC 3339 timestamps ssoosshd sends, as Unix seconds UTC.
  *

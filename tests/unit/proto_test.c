@@ -148,25 +148,34 @@ int suite_json(void)
     /* The JSON writer, which builds the request body. */
     {
         char buf[256];
-        size_t len = 0;
+        ssoossh_json_wr w;
 
-        T_CHECK(ssoossh_json_append(buf, sizeof(buf), &len, "{\"k\":"));
-        T_CHECK(ssoossh_json_append_string(buf, sizeof(buf), &len,
-                                           "a\"b\\c\nd\te"));
-        T_CHECK(ssoossh_json_append(buf, sizeof(buf), &len, "}"));
+        ssoossh_json_wr_init(&w, buf, sizeof(buf));
+        ssoossh_json_append(&w, "{\"k\":");
+        ssoossh_json_append_string(&w, "a\"b\\c\nd\te");
+        ssoossh_json_append(&w, "}");
+        T_CHECK(ssoossh_json_wr_ok(&w));
         T_EQ_STR(buf, "{\"k\":\"a\\\"b\\\\c\\nd\\te\"}");
 
         /* A control byte becomes \u00XX rather than reaching the wire. */
-        len = 0;
-        T_CHECK(ssoossh_json_append_string(buf, sizeof(buf), &len, "a\x01"));
+        ssoossh_json_wr_init(&w, buf, sizeof(buf));
+        ssoossh_json_append_string(&w, "a\x01");
+        T_CHECK(ssoossh_json_wr_ok(&w));
         T_EQ_STR(buf, "\"a\\u0001\"");
 
         /* Overflow is reported, never truncated into valid-looking JSON. */
         {
             char tiny[6];
-            size_t n = 0;
-            T_CHECK(!ssoossh_json_append_string(tiny, sizeof(tiny), &n,
-                                                "abcdefgh"));
+            ssoossh_json_wr tw;
+
+            ssoossh_json_wr_init(&tw, tiny, sizeof(tiny));
+            ssoossh_json_append_string(&tw, "abcdefgh");
+            T_CHECK(!ssoossh_json_wr_ok(&tw));
+
+            /* And it latches: a later write that would have fit is still
+             * dropped, so one check at the end is enough. */
+            ssoossh_json_append(&tw, "x");
+            T_CHECK(!ssoossh_json_wr_ok(&tw));
         }
     }
 

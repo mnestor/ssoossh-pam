@@ -1,44 +1,20 @@
 #include "der.h"
 
-#include <string.h>
+#include "sshwire.h"
 
-/* A write cursor with the same latched-failure discipline as ssh_wr: an
- * overflow poisons the rest and the caller checks once. */
-typedef struct {
-    uint8_t *buf;
-    size_t cap;
-    size_t len;
-    bool bad;
-} der_wr;
-
-static void der_init(der_wr *w, uint8_t *buf, size_t cap)
+/* Written through ssh_wr: a bounded cursor with latched failure is the same
+ * problem the SSH writer already solves, and one implementation of "did we
+ * check the length" is the point of having it. */
+static void der_byte(ssh_wr *w, uint8_t b)
 {
-    w->buf = buf;
-    w->cap = cap;
-    w->len = 0;
-    w->bad = false;
-}
-
-static void der_raw(der_wr *w, const uint8_t *p, size_t n)
-{
-    if (w->bad || n > w->cap - w->len) {
-        w->bad = true;
-        return;
-    }
-    memcpy(w->buf + w->len, p, n);
-    w->len += n;
-}
-
-static void der_byte(der_wr *w, uint8_t b)
-{
-    der_raw(w, &b, 1);
+    ssh_wr_bytes(w, &b, 1);
 }
 
 /* DER length: short form below 128, long form above, with no leading zero
  * in the length bytes. The definite-length long form beyond three bytes is
  * not written because nothing here is that big -- an 8192-bit RSA modulus
  * is 1024 bytes. */
-static void der_len(der_wr *w, size_t n)
+static void der_len(ssh_wr *w, size_t n)
 {
     if (n < 0x80) {
         der_byte(w, (uint8_t)n);
@@ -54,11 +30,11 @@ static void der_len(der_wr *w, size_t n)
     }
 }
 
-static void der_tlv(der_wr *w, uint8_t tag, const uint8_t *content, size_t n)
+static void der_tlv(ssh_wr *w, uint8_t tag, const uint8_t *content, size_t n)
 {
     der_byte(w, tag);
     der_len(w, n);
-    der_raw(w, content, n);
+    ssh_wr_bytes(w, content, n);
 }
 
 /* INTEGER from a big-endian magnitude: leading zero bytes dropped, and a
@@ -66,7 +42,7 @@ static void der_tlv(der_wr *w, uint8_t tag, const uint8_t *content, size_t n)
  * negative. The same normalization an SSH mpint has, in a different
  * encoding -- which is exactly why a signature has to be re-encoded rather
  * than passed through. */
-static void der_integer(der_wr *w, const uint8_t *p, size_t n)
+static void der_integer(ssh_wr *w, const uint8_t *p, size_t n)
 {
     size_t i = 0;
 
@@ -82,7 +58,7 @@ static void der_integer(der_wr *w, const uint8_t *p, size_t n)
         der_byte(w, 0x02);
         der_len(w, n - i + 1);
         der_byte(w, 0x00);
-        der_raw(w, p + i, n - i);
+        ssh_wr_bytes(w, p + i, n - i);
         return;
     }
     der_tlv(w, 0x02, p + i, n - i);
@@ -90,20 +66,22 @@ static void der_integer(der_wr *w, const uint8_t *p, size_t n)
 
 /* BIT STRING with no unused bits, which is the only kind a key encoding
  * uses. */
-static void der_bitstring(der_wr *w, const uint8_t *p, size_t n)
+static void der_bitstring(ssh_wr *w, const uint8_t *p, size_t n)
 {
     der_byte(w, 0x03);
     der_len(w, n + 1);
     der_byte(w, 0x00);
-    der_raw(w, p, n);
+    ssh_wr_bytes(w, p, n);
 }
 
-static bool der_finish(const der_wr *w, size_t *out_len)
+/* Commits a finished writer: the one check the latched discipline asks
+ * for, plus the length the caller needs. */
+static bool der_finish(const ssh_wr *w, size_t *out_len)
 {
-    if (w->bad) {
+    if (!ssh_wr_ok(w)) {
         return false;
     }
-    *out_len = w->len;
+    *out_len = ssh_wr_len(w);
     return true;
 }
 
@@ -114,17 +92,17 @@ bool ssoossh_der_ecdsa_sig(const uint8_t *r, size_t r_len, const uint8_t *s,
     /* Two P-521 integers with sign padding and headers: 2 * (2 + 1 + 66)
      * plus the outer header. 256 is comfortable and fixed. */
     uint8_t body[256];
-    der_wr in, w;
+    ssh_wr in, w;
     size_t body_len;
 
-    der_init(&in, body, sizeof(body));
+    ssh_wr_init(&in, body, sizeof(body));
     der_integer(&in, r, r_len);
     der_integer(&in, s, s_len);
     if (!der_finish(&in, &body_len)) {
         return false;
     }
 
-    der_init(&w, out, out_cap);
+    ssh_wr_init(&w, out, out_cap);
     der_tlv(&w, 0x30, body, body_len);
     return der_finish(&w, out_len);
 }
@@ -150,26 +128,26 @@ static bool spki(const uint8_t *alg, size_t alg_len, const uint8_t *params,
 {
     uint8_t alg_id[64];
     uint8_t body[2048];
-    der_wr a, b, w;
+    ssh_wr a, b, w;
     size_t alg_id_len, body_len;
 
-    der_init(&a, alg_id, sizeof(alg_id));
-    der_raw(&a, alg, alg_len);
+    ssh_wr_init(&a, alg_id, sizeof(alg_id));
+    ssh_wr_bytes(&a, alg, alg_len);
     if (params != NULL) {
-        der_raw(&a, params, params_len);
+        ssh_wr_bytes(&a, params, params_len);
     }
     if (!der_finish(&a, &alg_id_len)) {
         return false;
     }
 
-    der_init(&b, body, sizeof(body));
+    ssh_wr_init(&b, body, sizeof(body));
     der_tlv(&b, 0x30, alg_id, alg_id_len);
     der_bitstring(&b, key, key_len);
     if (!der_finish(&b, &body_len)) {
         return false;
     }
 
-    der_init(&w, out, out_cap);
+    ssh_wr_init(&w, out, out_cap);
     der_tlv(&w, 0x30, body, body_len);
     return der_finish(&w, out_len);
 }
@@ -217,17 +195,17 @@ bool ssoossh_der_rsa_pkcs1(const uint8_t *e, size_t e_len, const uint8_t *n,
      * -- note the order is n then e, the reverse of the SSH blob's. Getting
      * this backwards produces a key that parses and verifies nothing. */
     uint8_t inner[1200];
-    der_wr i, w;
+    ssh_wr i, w;
     size_t inner_len;
 
-    der_init(&i, inner, sizeof(inner));
+    ssh_wr_init(&i, inner, sizeof(inner));
     der_integer(&i, n, n_len);
     der_integer(&i, e, e_len);
     if (!der_finish(&i, &inner_len)) {
         return false;
     }
 
-    der_init(&w, out, out_cap);
+    ssh_wr_init(&w, out, out_cap);
     der_tlv(&w, 0x30, inner, inner_len);
     return der_finish(&w, out_len);
 }

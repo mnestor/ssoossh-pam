@@ -9,6 +9,17 @@
  * no natural bound on the number of accounts a host might list. */
 #define MAX_MAP_FILE (256 * 1024)
 
+/* Reports a malformed line and leaves. Spelling the status assignment and
+ * the jump out at each of the dozen sites invited one that set neither --
+ * which would return SSOOSSH_MAP_OK with an empty result, the fail-open
+ * answer this parser exists to avoid. */
+#define MAP_FAIL(...)                                                          \
+    do {                                                                       \
+        (void)snprintf(err, err_cap, __VA_ARGS__);                             \
+        status = SSOOSSH_MAP_MALFORMED;                                        \
+        goto done;                                                             \
+    } while (0)
+
 /* One line, sliced out of the file buffer. */
 typedef struct {
     const char *p;
@@ -280,12 +291,9 @@ ssoossh_map_status ssoossh_principals_map_load(const char *path,
          * YAML forbids it outright, so a file using tabs was never being
          * read the way its author expected. */
         if (memchr(content.p, '\t', indent) != NULL) {
-            (void)snprintf(err, err_cap,
-                           "line %zu: indented with a tab; YAML requires "
-                           "spaces",
-                           line_no);
-            status = SSOOSSH_MAP_MALFORMED;
-            goto done;
+            MAP_FAIL("line %zu: indented with a tab; YAML requires "
+                     "spaces",
+                     line_no);
         }
         content = trim(content);
 
@@ -301,33 +309,21 @@ ssoossh_map_status ssoossh_principals_map_load(const char *path,
              * Requiring the space keeps this parser from reading one as
              * the other. */
             if (item.len > 0 && item.p[0] != ' ') {
-                (void)snprintf(err, err_cap,
-                               "line %zu: a list item needs a space after "
-                               "its \"-\"",
-                               line_no);
-                status = SSOOSSH_MAP_MALFORMED;
-                goto done;
+                MAP_FAIL("line %zu: a list item needs a space after "
+                         "its \"-\"",
+                         line_no);
             }
             if (!unquote(trim(item), &principal)) {
-                (void)snprintf(err, err_cap,
-                               "line %zu: quoted value uses escapes or "
-                               "embedded quotes, which are not supported",
-                               line_no);
-                status = SSOOSSH_MAP_MALFORMED;
-                goto done;
+                MAP_FAIL("line %zu: quoted value uses escapes or "
+                         "embedded quotes, which are not supported",
+                         line_no);
             }
             if (principal.len == 0) {
-                (void)snprintf(err, err_cap, "line %zu: empty principal",
-                               line_no);
-                status = SSOOSSH_MAP_MALFORMED;
-                goto done;
+                MAP_FAIL("line %zu: empty principal", line_no);
             }
             if (!have_open) {
-                (void)snprintf(err, err_cap,
-                               "line %zu: principal is not under any account",
-                               line_no);
-                status = SSOOSSH_MAP_MALFORMED;
-                goto done;
+                MAP_FAIL("line %zu: principal is not under any account",
+                         line_no);
             }
             if (open_is_ours) {
                 store(out, principal);
@@ -340,40 +336,25 @@ ssoossh_map_status ssoossh_principals_map_load(const char *path,
          * format does not have, and reading it as another account would
          * silently invent a mapping the file never declared. */
         if (indent > 0) {
-            (void)snprintf(err, err_cap,
-                           "line %zu: an account starts at the beginning of "
-                           "the line",
-                           line_no);
-            status = SSOOSSH_MAP_MALFORMED;
-            goto done;
+            MAP_FAIL("line %zu: an account starts at the beginning of "
+                     "the line",
+                     line_no);
         }
         if (!split_key(content, &key, &value)) {
-            (void)snprintf(err, err_cap,
-                           "line %zu: expected an \"account:\" line or a "
-                           "\"- principal\" list item",
-                           line_no);
-            status = SSOOSSH_MAP_MALFORMED;
-            goto done;
+            MAP_FAIL("line %zu: expected an \"account:\" line or a "
+                     "\"- principal\" list item",
+                     line_no);
         }
         if (!unquote(key, &name)) {
-            (void)snprintf(err, err_cap,
-                           "line %zu: quoted account name uses escapes or "
-                           "embedded quotes, which are not supported",
-                           line_no);
-            status = SSOOSSH_MAP_MALFORMED;
-            goto done;
+            MAP_FAIL("line %zu: quoted account name uses escapes or "
+                     "embedded quotes, which are not supported",
+                     line_no);
         }
         if (name.len == 0) {
-            (void)snprintf(err, err_cap, "line %zu: empty account name",
-                           line_no);
-            status = SSOOSSH_MAP_MALFORMED;
-            goto done;
+            MAP_FAIL("line %zu: empty account name", line_no);
         }
         if (account_seen(data, pos, name)) {
-            (void)snprintf(err, err_cap, "line %zu: account is already defined",
-                           line_no);
-            status = SSOOSSH_MAP_MALFORMED;
-            goto done;
+            MAP_FAIL("line %zu: account is already defined", line_no);
         }
 
         open_is_ours = slice_eq(name, account);
@@ -393,12 +374,9 @@ ssoossh_map_status ssoossh_principals_map_load(const char *path,
             }
             have_open = false;
         } else {
-            (void)snprintf(err, err_cap,
-                           "line %zu: account must be followed by a list of "
-                           "principals",
-                           line_no);
-            status = SSOOSSH_MAP_MALFORMED;
-            goto done;
+            MAP_FAIL("line %zu: account must be followed by a list of "
+                     "principals",
+                     line_no);
         }
 
     next:

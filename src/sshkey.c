@@ -42,16 +42,9 @@ static bool blob_algo(const uint8_t *blob, size_t blob_len, char *out,
                       size_t out_cap)
 {
     ssh_rd r;
-    const uint8_t *p = NULL;
-    size_t n = 0;
 
     ssh_rd_init(&r, blob, blob_len);
-    if (!ssh_rd_str(&r, &p, &n) || n == 0 || n >= out_cap) {
-        return false;
-    }
-    memcpy(out, p, n);
-    out[n] = '\0';
-    return true;
+    return ssh_rd_cstr(&r, out, out_cap);
 }
 
 bool ssoossh_sshkey_authorized_line(const uint8_t *blob, size_t blob_len,
