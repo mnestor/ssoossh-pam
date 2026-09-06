@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "log.h"
+#include "qr.h"
 
 /* Crockford Base32 omits I, L, O and U -- the letters that get confused
  * with digits or with each other when a human reads a code off a screen and
@@ -50,10 +51,21 @@ static size_t sanitize_qr(const char *in, char *out, size_t out_size)
 
         if (c == ' ' || c == '\n') {
             take = 1;
-        } else if (c == 0xE2 && (unsigned char)in[i + 1] == 0x96) {
-            unsigned char third = (unsigned char)in[i + 2];
-            if (third == 0x80 || third == 0x84 || third == 0x88) {
-                take = 3; /* U+2580, U+2584, U+2588 */
+        } else if (in[i + 1] != '\0' && in[i + 2] != '\0') {
+            /* in[i] is not the NUL, so in[i + 1] is a valid read; it not
+             * being the NUL makes in[i + 2] one too. Only then are there
+             * three bytes to compare. */
+            static const char *const blocks[] = {
+                SSOOSSH_QR_UPPER,
+                SSOOSSH_QR_LOWER,
+                SSOOSSH_QR_BOTH,
+            };
+
+            for (size_t k = 0; k < sizeof(blocks) / sizeof(blocks[0]); k++) {
+                if (memcmp(in + i, blocks[k], 3) == 0) {
+                    take = 3;
+                    break;
+                }
             }
         }
 

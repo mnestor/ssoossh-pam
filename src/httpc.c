@@ -11,7 +11,6 @@
 #include <curl/curl.h>
 
 #include "cancel.h"
-#include "json.h"
 #include "log.h"
 
 /* How long to wait before reconnecting an events stream that established
@@ -83,7 +82,6 @@ int64_t ssoossh_monotonic_ms(void)
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-#ifdef __APPLE__
 /* curl's SecureTransport backend rejects the CURLOPT_SSLVERSION floor pin
  * outright with CURLE_NOT_BUILT_IN (curl issue #2969: the "or later"
  * minimum-version form works for OpenSSL but not for Secure Transport or
@@ -92,9 +90,16 @@ int64_t ssoossh_monotonic_ms(void)
  * is verified after the fact instead, from curl's own connection trace --
  * the one place this backend does report what it actually negotiated. */
 typedef struct {
+#ifdef __APPLE__
     char version[16];
+#else
+    /* Nothing to record where the floor is pinned on the handle. A struct
+     * with no members is not C, so this holds the place. */
+    char unused;
+#endif
 } tls_probe;
 
+#ifdef __APPLE__
 static int on_debug_text(CURL *h, curl_infotype type, char *data, size_t size,
                          void *userptr)
 {
@@ -143,6 +148,24 @@ static bool tls_floor_met(const tls_probe *probe, const char *url)
 }
 #endif
 
+/* Whether the connection met the floor, logging the refusal if it did not.
+ * Off macOS the floor was pinned on the handle and there is nothing left to
+ * check, so this is the answer both callers ask for unconditionally. */
+static bool tls_floor_ok(const tls_probe *probe, const char *url)
+{
+#ifdef __APPLE__
+    if (!tls_floor_met(probe, url)) {
+        ssoossh_errf("negotiated %s, refusing (floor is TLS 1.3)",
+                     probe->version[0] != '\0' ? probe->version : "unknown");
+        return false;
+    }
+#else
+    (void)probe;
+    (void)url;
+#endif
+    return true;
+}
+
 /* Applied to every handle. Each line here is load-bearing:
  *
  *   NOSIGNAL, because libcurl otherwise uses SIGALRM and siglongjmp for its
@@ -152,10 +175,11 @@ static bool tls_floor_met(const tls_probe *probe, const char *url)
  *   No FOLLOWLOCATION: an authentication flow must not silently follow a
  *   redirect to another origin.
  *
- *   TLS 1.3 as the floor, matching the Go client's MinVersion -- pinned
- *   here on every platform except macOS, where it is verified after the
- *   connection instead; see tls_floor_met above. */
-static void apply_common(CURL *h, bool insecure)
+ *   TLS 1.3 as the floor, matching the Go client's MinVersion -- pinned on
+ *   the handle where curl accepts the pin, and armed for the after-the-fact
+ *   check where it does not. Either way the callers just set it up here and
+ *   ask tls_floor_ok afterwards. */
+static void apply_common(CURL *h, bool insecure, tls_probe *probe)
 {
     static const char *const user_agent =
         "ssoossh-pam-c/" PAM_SSOOSSH_VERSION " (https://github.com/mnestor/"
@@ -163,7 +187,13 @@ static void apply_common(CURL *h, bool insecure)
 
     curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 0L);
-#ifndef __APPLE__
+#ifdef __APPLE__
+    memset(probe, 0, sizeof(*probe));
+    curl_easy_setopt(h, CURLOPT_VERBOSE, 1L);
+    curl_easy_setopt(h, CURLOPT_DEBUGFUNCTION, on_debug_text);
+    curl_easy_setopt(h, CURLOPT_DEBUGDATA, probe);
+#else
+    (void)probe;
     curl_easy_setopt(h, CURLOPT_SSLVERSION, (long)CURL_SSLVERSION_TLSv1_3);
 #endif
     curl_easy_setopt(h, CURLOPT_USERAGENT, user_agent);
@@ -247,9 +277,7 @@ ssoossh_http_result ssoossh_httpc_post_json(const char *url, const char *body,
     progress_ctx prog = {deadline_ms, false, false};
     ssoossh_http_result result = SSOOSSH_HTTP_INTERNAL;
     CURLcode rc;
-#ifdef __APPLE__
-    tls_probe probe = {{0}};
-#endif
+    tls_probe probe;
 
     *resp_len = 0;
     *status = 0;
@@ -272,7 +300,7 @@ ssoossh_http_result ssoossh_httpc_post_json(const char *url, const char *body,
         return SSOOSSH_HTTP_INTERNAL;
     }
 
-    apply_common(h, insecure);
+    apply_common(h, insecure, &probe);
     curl_easy_setopt(h, CURLOPT_URL, url);
     curl_easy_setopt(h, CURLOPT_POST, 1L);
     curl_easy_setopt(h, CURLOPT_POSTFIELDS, body);
@@ -283,26 +311,18 @@ ssoossh_http_result ssoossh_httpc_post_json(const char *url, const char *body,
     curl_easy_setopt(h, CURLOPT_NOPROGRESS, 0L);
     curl_easy_setopt(h, CURLOPT_XFERINFOFUNCTION, on_progress);
     curl_easy_setopt(h, CURLOPT_XFERINFODATA, &prog);
-#ifdef __APPLE__
-    curl_easy_setopt(h, CURLOPT_VERBOSE, 1L);
-    curl_easy_setopt(h, CURLOPT_DEBUGFUNCTION, on_debug_text);
-    curl_easy_setopt(h, CURLOPT_DEBUGDATA, &probe);
-#endif
 
     rc = curl_easy_perform(h);
     curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, status);
     *resp_len = sink.len;
 
     if (rc == CURLE_OK) {
-#ifdef __APPLE__
-        if (!tls_floor_met(&probe, url)) {
-            ssoossh_errf("negotiated %s, refusing (floor is TLS 1.3)",
-                         probe.version[0] != '\0' ? probe.version : "unknown");
+        if (!tls_floor_ok(&probe, url)) {
             result = SSOOSSH_HTTP_TRANSPORT;
-        } else
-#endif
+        } else {
             result = (*status >= 200 && *status < 300) ? SSOOSSH_HTTP_OK
                                                        : SSOOSSH_HTTP_STATUS;
+        }
     } else if (prog.cancelled) {
         result = SSOOSSH_HTTP_CANCELLED;
     } else if (prog.timed_out) {
@@ -337,7 +357,6 @@ typedef struct {
     size_t err_cap;
     size_t err_len;
 
-    bool sse_stopped;
 } stream_ctx;
 
 static size_t write_stream(char *p, size_t size, size_t nmemb, void *ctx)
@@ -366,9 +385,6 @@ static size_t write_stream(char *p, size_t size, size_t nmemb, void *ctx)
     }
 
     if (!ssoossh_sse_feed(s->sse, p, n, s->cb, s->cb_ctx)) {
-        if (s->sse->stopped) {
-            s->sse_stopped = true;
-        }
         return 0; /* aborts the transfer, which is what a terminal event
                    * and an overflow both want */
     }
@@ -397,9 +413,7 @@ static ssoossh_http_result run_stream(const char *url, bool insecure,
     stream_ctx sc;
     ssoossh_http_result result = SSOOSSH_HTTP_INTERNAL;
     int running = 1;
-#ifdef __APPLE__
-    tls_probe probe = {{0}};
-#endif
+    tls_probe probe;
 
     memset(&sc, 0, sizeof(sc));
     sc.sse = sse;
@@ -424,17 +438,12 @@ static ssoossh_http_result run_stream(const char *url, bool insecure,
         goto done;
     }
 
-    apply_common(h, insecure);
+    apply_common(h, insecure, &probe);
     curl_easy_setopt(h, CURLOPT_URL, url);
     curl_easy_setopt(h, CURLOPT_HTTPGET, 1L);
     curl_easy_setopt(h, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, write_stream);
     curl_easy_setopt(h, CURLOPT_WRITEDATA, &sc);
-#ifdef __APPLE__
-    curl_easy_setopt(h, CURLOPT_VERBOSE, 1L);
-    curl_easy_setopt(h, CURLOPT_DEBUGFUNCTION, on_debug_text);
-    curl_easy_setopt(h, CURLOPT_DEBUGDATA, &probe);
-#endif
 
     if (curl_multi_add_handle(multi, h) != CURLM_OK) {
         goto done;
@@ -449,6 +458,7 @@ static ssoossh_http_result run_stream(const char *url, bool insecure,
         int numfds = 0;
         long curl_timeout = -1;
         int64_t remaining = deadline_ms - ssoossh_monotonic_ms();
+        int64_t before;
         long slice;
 
         if (ssoossh_cancel_fired()) {
@@ -480,14 +490,26 @@ static ssoossh_http_result run_stream(const char *url, bool insecure,
             slice = 1;
         }
 
+        before = ssoossh_monotonic_ms();
         if (curl_multi_wait(multi, NULL, 0, (int)slice, &numfds) != CURLM_OK) {
             result = SSOOSSH_HTTP_TRANSPORT;
             goto done;
         }
+        /* numfds counts descriptors with activity, not descriptors being
+         * watched, so a zero here is also what an established but idle
+         * stream looks like -- and that one has already blocked for the
+         * whole slice. Sleeping only the unslept remainder keeps the guard
+         * for the resolving case without doubling the slice, which would
+         * halve how often the deadline and a Ctrl-C are noticed. */
         if (numfds == 0) {
-            struct timespec ts = {0, (long)slice * 1000000L};
-            /* Interrupted by SIGINT is fine: the loop rechecks the flag. */
-            (void)nanosleep(&ts, NULL);
+            long left = (long)(slice - (ssoossh_monotonic_ms() - before));
+
+            if (left > 0) {
+                struct timespec ts = {0, left * 1000000L};
+                /* Interrupted by SIGINT is fine: the loop rechecks the
+                 * flag. */
+                (void)nanosleep(&ts, NULL);
+            }
         }
     }
 
@@ -502,20 +524,9 @@ static ssoossh_http_result run_stream(const char *url, bool insecure,
         }
         curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, status);
 
-        /* Hand-formatted: with the #endif between them, the formatter
-         * reads this `if` as the else's substatement and indents it a
-         * level deeper than its own body, which hides the shape of the
-         * chain. On a build that is not Apple's it is the chain head. */
-        /* clang-format off */
-#ifdef __APPLE__
-        if (!tls_floor_met(&probe, url)) {
-            ssoossh_errf("negotiated %s, refusing (floor is TLS 1.3)",
-                         probe.version[0] != '\0' ? probe.version : "unknown");
+        if (!tls_floor_ok(&probe, url)) {
             result = SSOOSSH_HTTP_TRANSPORT;
-        } else
-#endif
-        if (sc.sse_stopped) {
-            /* clang-format on */
+        } else if (sse->stopped) {
             /* A callback said it had what it needed. The write callback
              * returned short to stop the transfer, which libcurl reports as
              * a write error -- expected, not a failure. */
@@ -526,12 +537,13 @@ static ssoossh_http_result run_stream(const char *url, bool insecure,
         } else if (sc.status_known && sc.status >= 300) {
             *status = sc.status;
             result = SSOOSSH_HTTP_STATUS;
-        } else if (rc == CURLE_OK) {
-            /* The stream ended cleanly without an outcome: a dropped
-             * connection, which the caller reconnects for. */
-            result = SSOOSSH_HTTP_TRANSPORT;
         } else {
-            ssoossh_debugf("events stream ended: %s", curl_easy_strerror(rc));
+            if (rc != CURLE_OK) {
+                ssoossh_debugf("events stream ended: %s",
+                               curl_easy_strerror(rc));
+            }
+            /* A clean end with no outcome is a dropped connection, which
+             * the caller reconnects for. */
             result = SSOOSSH_HTTP_TRANSPORT;
         }
     }
@@ -548,20 +560,27 @@ done:
     return result;
 }
 
-/* Sleeps between reconnects, waking early for a Ctrl-C or the deadline. */
+/* Sleeps between reconnects, waking early for a Ctrl-C or the deadline.
+ *
+ * One sleep rather than a poll: ssoossh_cancel_arm installs its handler
+ * without SA_RESTART precisely so a Ctrl-C ends the nanosleep with EINTR,
+ * which is checked on the way out. */
 static bool wait_to_reconnect(int64_t deadline_ms)
 {
-    int64_t until = ssoossh_monotonic_ms() + RECONNECT_DELAY_MS;
+    int64_t left = deadline_ms - ssoossh_monotonic_ms();
+    struct timespec ts;
 
-    while (ssoossh_monotonic_ms() < until) {
-        struct timespec ts = {0, 20 * 1000000L};
-
-        if (ssoossh_cancel_fired() || ssoossh_monotonic_ms() >= deadline_ms) {
-            return false;
-        }
-        (void)nanosleep(&ts, NULL);
+    if (ssoossh_cancel_fired() || left <= 0) {
+        return false;
     }
-    return true;
+    if (left > RECONNECT_DELAY_MS) {
+        left = RECONNECT_DELAY_MS;
+    }
+    ts.tv_sec = (time_t)(left / 1000);
+    ts.tv_nsec = (long)(left % 1000) * 1000000L;
+    (void)nanosleep(&ts, NULL);
+
+    return !ssoossh_cancel_fired() && ssoossh_monotonic_ms() < deadline_ms;
 }
 
 ssoossh_http_result ssoossh_httpc_events(const char *url, bool insecure,

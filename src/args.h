@@ -89,8 +89,8 @@ typedef struct {
 typedef enum {
     SSOOSSH_ARGS_OK = 0,
     SSOOSSH_ARGS_BAD_MODE,
-    /* mode=console on a build that does not carry it: macOS, which ships
-     * no artifact and where a console login is scope with no user. */
+    /* mode=console on a build that does not carry it: macOS, whose console
+     * login is loginwindow and never shows a PAM message. */
     SSOOSSH_ARGS_CONSOLE_UNSUPPORTED,
     SSOOSSH_ARGS_VALUE_TOO_LONG,
 } ssoossh_args_status;

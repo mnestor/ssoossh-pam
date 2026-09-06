@@ -55,6 +55,15 @@ static bool numbered(const char *name, const char *prefix)
     return true;
 }
 
+bool ssoossh_console_flow_supported(void)
+{
+#ifdef __APPLE__
+    return false;
+#else
+    return true;
+#endif
+}
+
 bool ssoossh_context_is_console(const ssoossh_request_context *ctx)
 {
     const char *tty = ctx->tty;

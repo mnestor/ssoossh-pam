@@ -13,10 +13,11 @@
 #define QR_MAX_VERSION 4
 #define QUIET 2
 
-/* The three block characters, as their UTF-8 bytes. */
-static const char *const upper_only = "\xe2\x96\x80"; /* U+2580 */
-static const char *const lower_only = "\xe2\x96\x84"; /* U+2584 */
-static const char *const both = "\xe2\x96\x88";       /* U+2588 */
+/* The three block characters. Defined in qr.h because conv.c's whitelist
+ * has to admit exactly these. */
+static const char *const upper_only = SSOOSSH_QR_UPPER;
+static const char *const lower_only = SSOOSSH_QR_LOWER;
+static const char *const both = SSOOSSH_QR_BOTH;
 
 static bool put(char *out, size_t out_cap, size_t *w, const char *s, size_t n)
 {
@@ -43,7 +44,7 @@ size_t ssoossh_qr_render(const char *text, char *out, size_t out_cap)
 {
     uint8_t qr[qrcodegen_BUFFER_LEN_FOR_VERSION(QR_MAX_VERSION)];
     uint8_t tmp[qrcodegen_BUFFER_LEN_FOR_VERSION(QR_MAX_VERSION)];
-    int size, width;
+    int size;
     size_t w = 0;
 
     if (out_cap == 0) {
@@ -59,7 +60,6 @@ size_t ssoossh_qr_render(const char *text, char *out, size_t out_cap)
     }
 
     size = qrcodegen_getSize(qr);
-    width = size + 2 * QUIET;
 
     /* Two module rows per terminal row. y steps by two and each column
      * picks the character that lights the right halves. */
@@ -92,7 +92,6 @@ size_t ssoossh_qr_render(const char *text, char *out, size_t out_cap)
         }
     }
 
-    (void)width;
     out[w] = '\0';
     return w;
 }

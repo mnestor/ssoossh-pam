@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "console.h"
 #include "log.h"
 
 /* Nanoseconds per unit, in the order time.ParseDuration's unitMap lists
@@ -31,8 +32,6 @@ static const struct {
     {"h", 3600LL * 1000000000},
 };
 
-#define INT64_MAX_V ((int64_t)0x7fffffffffffffffLL)
-
 /* Consumes a run of decimal digits, failing rather than wrapping on
  * overflow -- the same contract as Go's leadingInt. */
 static bool leading_int(const char **sp, int64_t *out)
@@ -41,12 +40,12 @@ static bool leading_int(const char **sp, int64_t *out)
     int64_t x = 0;
 
     for (; *s >= '0' && *s <= '9'; s++) {
-        if (x > INT64_MAX_V / 10) {
+        if (x > INT64_MAX / 10) {
             return false;
         }
         x *= 10;
         int64_t d = *s - '0';
-        if (x > INT64_MAX_V - d) {
+        if (x > INT64_MAX - d) {
             return false;
         }
         x += d;
@@ -71,7 +70,7 @@ static void leading_fraction(const char **sp, int64_t *value, double *scale)
         if (overflow) {
             continue;
         }
-        if (x > INT64_MAX_V / 10) {
+        if (x > INT64_MAX / 10) {
             overflow = true;
             continue;
         }
@@ -161,7 +160,7 @@ bool ssoossh_duration_parse(const char *s, ssoossh_duration *out)
             return false; /* unknown unit */
         }
 
-        if (v > INT64_MAX_V / unit) {
+        if (v > INT64_MAX / unit) {
             return false;
         }
         v *= unit;
@@ -315,34 +314,32 @@ static bool parse_bool(const char *v, bool *out)
     return false;
 }
 
+static char fold(char c)
+{
+    return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
+
 static bool ascii_eq_fold(const char *a, const char *b)
 {
     for (; *a != '\0' && *b != '\0'; a++, b++) {
-        char ca = *a, cb = *b;
-        if (ca >= 'A' && ca <= 'Z') {
-            ca = (char)(ca - 'A' + 'a');
-        }
-        if (cb >= 'A' && cb <= 'Z') {
-            cb = (char)(cb - 'A' + 'a');
-        }
-        if (ca != cb) {
+        if (fold(*a) != fold(*b)) {
             return false;
         }
     }
     return *a == *b;
 }
 
+/* Compares only as far as the prefix runs, so it needs no buffer and no cap
+ * on how long a prefix may be. A short s stops at its NUL, which never
+ * folds equal to a prefix character. */
 static bool has_prefix_fold(const char *s, const char *prefix)
 {
-    size_t n = strlen(prefix);
-    char head[16];
-
-    if (strlen(s) < n || n >= sizeof(head)) {
-        return false;
+    for (; *prefix != '\0'; s++, prefix++) {
+        if (fold(*s) != fold(*prefix)) {
+            return false;
+        }
     }
-    memcpy(head, s, n);
-    head[n] = '\0';
-    return ascii_eq_fold(head, prefix);
+    return true;
 }
 
 /* normalizeServerURL from the Go client: trims surrounding whitespace and
@@ -480,20 +477,16 @@ ssoossh_args_status ssoossh_args_parse(int argc, const char **argv,
             } else if (strcmp(value, "sudo") == 0) {
                 cfg->mode = SSOOSSH_MODE_SUDO;
             } else if (strcmp(value, "console") == 0) {
-#ifdef __APPLE__
                 /* Recognized and refused, which is not the same as
-                 * unrecognized. Console mode is not compiled into the macOS
-                 * build -- that platform ships no artifact, so a console
-                 * login there is scope with no user. Saying so beats
-                 * running the browser flow under a name that asked for
-                 * something else. */
-                if (bad_arg != NULL) {
-                    *bad_arg = arg;
+                 * unrecognized. Saying so beats running the browser flow
+                 * under a name that asked for something else. */
+                if (!ssoossh_console_flow_supported()) {
+                    if (bad_arg != NULL) {
+                        *bad_arg = arg;
+                    }
+                    return SSOOSSH_ARGS_CONSOLE_UNSUPPORTED;
                 }
-                return SSOOSSH_ARGS_CONSOLE_UNSUPPORTED;
-#else
                 cfg->mode = SSOOSSH_MODE_CONSOLE;
-#endif
             } else {
                 if (bad_arg != NULL) {
                     *bad_arg = arg;

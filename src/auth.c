@@ -36,9 +36,7 @@
 #include "sshcert.h"
 #include "sshdetect.h"
 #include "sshkey.h"
-#ifndef __APPLE__
-#    include "qr.h"
-#endif
+#include "qr.h"
 
 /* Everything big, in one allocation with one free. */
 typedef struct {
@@ -60,10 +58,8 @@ typedef struct {
     char message[8192];
     char clean_url[1024];
     char clean_code[64];
-#ifndef __APPLE__
     char qr[SSOOSSH_QR_MAX_OUT];
     char clean_qr[SSOOSSH_QR_MAX_OUT];
-#endif
 
     ssoossh_ca_list cas;
     ssoossh_cert cert;
@@ -398,10 +394,10 @@ static void show_console_prompt(pam_handle_t *pamh, attempt *a,
                            "  Code:   %s\n",
                            a->clean_url, a->clean_code);
 
-#ifndef __APPLE__
     /* The QR encodes the complete verification URL -- /c/<code> -- so a
      * phone camera skips the code box entirely. It is drawn only when it
-     * fits; the code above is what always works. */
+     * fits; the code above is what always works, and a build without the
+     * encoder renders nothing, which is the same case. */
     if (a->verification_complete[0] != '\0' && len < sizeof(a->message)) {
         char complete[2048];
         size_t qr_len = 0;
@@ -417,12 +413,6 @@ static void show_console_prompt(pam_handle_t *pamh, attempt *a,
                            a->clean_qr);
         }
     }
-#else
-    /* No QR on this platform, so the message ends at the code and the
-     * length that would have placed the QR after it goes unused. */
-    (void)server;
-    (void)len;
-#endif
 
     rc = ssoossh_conv(pamh, PAM_TEXT_INFO, a->message, NULL);
     if (rc != PAM_SUCCESS) {
@@ -537,21 +527,14 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
         break;
     case SSOOSSH_MODE_AUTO:
     default:
-        console = ssoossh_context_is_console(&ctx);
+        /* A build without the console flow falls back rather than fails:
+         * an explicit mode=console is refused at argument-parse time, so
+         * reaching here means auto-detection picked it, and the browser
+         * flow is what such a platform has. */
+        console = ssoossh_console_flow_supported() &&
+                  ssoossh_context_is_console(&ctx);
         break;
     }
-#ifdef __APPLE__
-    if (console) {
-        /* Console mode is Linux and FreeBSD only. On a build that ships no
-         * artifact, a console login is scope with no user -- and an
-         * explicit mode=console is refused at argument-parse time, so
-         * reaching here means auto-detection picked it. Fall back rather
-         * than fail: the browser flow is what this platform has. */
-        ssoossh_debugf("console detected but not compiled in on this "
-                       "platform; using the browser flow");
-        console = false;
-    }
-#endif
     ssoossh_infof("%s flow for %s (service=%s tty=%s rhost=%s)",
                   console ? "console" : "browser", user,
                   ctx.service[0] != '\0' ? ctx.service : "-",

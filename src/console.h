@@ -58,4 +58,14 @@ void ssoossh_context_read(pam_handle_t *pamh, ssoossh_request_context *out);
  * console-like the tty on this end looks. */
 bool ssoossh_context_is_console(const ssoossh_request_context *ctx);
 
+/* Whether this build has the console flow at all. False on macOS, where a
+ * console login is loginwindow -- which never shows a PAM message, so there
+ * is no one to show a code and a QR to. The flow and its QR encoder are not
+ * compiled in there.
+ *
+ * Stated here once. It used to be re-decided in the argument parser and
+ * again in the authenticate path, the second time by undoing an answer the
+ * shared detection had already given. */
+bool ssoossh_console_flow_supported(void);
+
 #endif /* PAM_SSOOSSH_CONSOLE_H */
