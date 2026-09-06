@@ -31,6 +31,16 @@ here=$(cd "$(dirname "$0")" && pwd)
 module=${1:-$here/pam_ssoossh.so}
 info=${2:-$here/BUILDINFO}
 
+# FreeBSD's ldd takes a bare name as a soname to look up on the library
+# path rather than as a file in the current directory, and answers with its
+# own "not found" -- so `make install` in a source tree, which passes
+# pam_ssoossh.so, asked it the wrong question and got an alarming answer to
+# it. Give it a path.
+case $module in
+*/*) ;;
+*) module=./$module ;;
+esac
+
 # In a release tarball both of these sit beside this script; in a source
 # tree only dist-target.sh exists, one directory over, and there is no
 # BUILDINFO until `make dist` writes one.
@@ -66,22 +76,29 @@ fi
 
 # ldd on the module itself, which is the question asked in the form the
 # loader will ask it. Every platform spells an unresolved dependency its
-# own way -- "not found" on glibc and FreeBSD, "Error loading shared
-# library" on musl -- and none of them exit non-zero over one, so the
-# output is what is read. macOS has no ldd, and the bundle links only
-# frameworks that ship with the OS, so there is nothing to ask there.
+# own way -- "=> not found" on glibc and FreeBSD, "Error loading shared
+# library" on musl -- and none of them reliably exit non-zero over one, so
+# the output is what is read; the exit status only tells us whether ldd
+# managed to look at all, which is a different report to make. macOS has no
+# ldd, and the bundle links only frameworks that ship with the OS, so there
+# is nothing to ask there.
 case $(uname -s) in
 Darwin)
     echo "preflight: macOS links only system frameworks; no sonames to resolve"
     ;;
 *)
-    unresolved=$(ldd "$module" 2>&1 |
-        grep -E 'not found|Error loading shared library' || true)
+    if out=$(ldd "$module" 2>&1); then rc=0; else rc=$?; fi
+    unresolved=$(printf '%s\n' "$out" |
+        grep -E '=>[[:space:]]*not found|Error loading shared library' || true)
     if [ -n "$unresolved" ]; then
         echo "preflight: this host is missing libraries the module links:" >&2
         printf '%s\n' "$unresolved" | sed 's/^/  /' >&2
         echo "           A soname in that list that no package on this host provides" >&2
         echo "           means the wrong artifact -- see the \`needs:\` list in BUILDINFO." >&2
+        status=1
+    elif [ "$rc" != 0 ]; then
+        echo "preflight: ldd could not read $module, so nothing here was checked:" >&2
+        printf '%s\n' "$out" | sed 's/^/  /' >&2
         status=1
     else
         echo "preflight: every soname the module links resolves on this host"
