@@ -88,7 +88,7 @@ jobs:
 
       # Full history and tags, so `git describe` names the release rather
       # than a bare commit.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -124,7 +124,7 @@ jobs:
       - name: Package
         run: make dist DIST_TARGET=${{ matrix.target }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.target }}
           path: dist/*.tar.gz
@@ -152,7 +152,7 @@ jobs:
           - target: linux-musl_aarch64
             runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -179,7 +179,7 @@ jobs:
           make dist DIST_TARGET="$TARGET"
           EOF
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.target }}
           path: dist/*.tar.gz
@@ -192,7 +192,7 @@ jobs:
     name: freebsd14_x86_64
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -201,7 +201,7 @@ jobs:
       # else. Resolve the version on the host and hand it over.
       - run: echo "VERSION=$(git describe --tags --always --dirty)" >>"$GITHUB_ENV"
 
-      - uses: cross-platform-actions/action@v0.27.0
+      - uses: cross-platform-actions/action@v1.5.0
         with:
           operating_system: freebsd
           version: "14.2"
@@ -230,7 +230,7 @@ jobs:
             sudo gmake e2e
             gmake dist DIST_TARGET=freebsd14_x86_64
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-freebsd14_x86_64
           path: dist/*.tar.gz
@@ -267,7 +267,7 @@ jobs:
     env:
       HAVE_OP: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -315,7 +315,7 @@ jobs:
       - name: Signing material
         id: secrets
         if: ${{ env.HAVE_OP == 'true' }}
-        uses: 1password/load-secrets-action@e544b780808654ba8ceba5fb2fe2897103d92ff4 # v5.0.0
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
         with:
           export-env: false
         env:
@@ -345,7 +345,7 @@ jobs:
           packaging/package.sh dist/*.tar.gz dist
           ls -l dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-darwin_aarch64
           path: |
@@ -366,9 +366,9 @@ jobs:
       id-token: write # provenance attestation
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           path: dist
@@ -415,7 +415,7 @@ jobs:
       - name: Signing material
         id: secrets
         if: ${{ env.HAVE_OP == 'true' }}
-        uses: 1password/load-secrets-action@e544b780808654ba8ceba5fb2fe2897103d92ff4 # v5.0.0
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
         with:
           export-env: false
         env:
@@ -504,7 +504,7 @@ jobs:
       # enterprise -- so a private repository still gets its release.
       - name: Attest provenance
         if: ${{ !github.event.repository.private }}
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             dist/*.tar.gz
@@ -540,7 +540,7 @@ jobs:
 
       # On a manual run there is no tag and no release: the merged set is
       # kept as a workflow artifact for inspection instead.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: ${{ github.ref_type != 'tag' }}
         with:
           name: release-dry-run

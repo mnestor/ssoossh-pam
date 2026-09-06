@@ -88,7 +88,7 @@ jobs:
           echo "OPENSSL_FORCE_FIPS_MODE=1" >> "$GITHUB_ENV"
           OPENSSL_FORCE_FIPS_MODE=1 openssl md5 /dev/null 2>&1 | tail -1
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The version string comes from `git describe`, and a checkout owned by
       # a different uid than the container user makes git refuse to read it.
@@ -151,7 +151,7 @@ jobs:
             pkg-config libssl-dev libcurl4-openssl-dev libpam0g-dev git \
             openssh-client
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Trust the checkout
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
