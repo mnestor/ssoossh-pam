@@ -36,7 +36,7 @@ alice:              # a local account, at the start of the line
   \- alice           # a principal allowed to assume it
   \- admin           # indentation is free; "\- " marks an item
 bob: [bob, ops]     # a flow sequence on the account's own line
-carol:              # no principals: nobody may become carol
+carol:              # no principals: adds nothing, same as absent
 dave: ~             # null and ~ mean the same as nothing
 .fi
 .RE
@@ -80,6 +80,24 @@ mapped identities their access until it is fixed; it cannot grant access
 that was not already there, and it cannot take the host. That is also why
 the parser is strict: a file that parses one way here and another way
 elsewhere would change which identities work, silently.
+.PP
+The same file is read by \fBssoossh host principals\fR, the command sshd
+runs as its
+.BR AuthorizedPrincipalsCommand ,
+and both ends apply the account's own name on every path \(em including an
+account the file never mentions, an account listed with nothing, and a file
+that exists but fails to load. This module accepts the name before
+consulting the map at all; that command prints it alongside whatever the
+file lists for the account. One file therefore means one policy for sshd
+and for the services that load this module.
+.PP
+The two differ only in how a file that fails to load is reported: the
+command logs the error to stderr, this module warns through PAM's own
+logging. Neither withholds the account's own name over it, so a mistyped
+path or a bad edit cannot cost an account its own name. There is no
+supported way for this file to deny an account its own name: not by
+omitting it, not by listing it with no principals, and not by failing to
+parse.
 .SH LIMITS
 Up to 64 principals per account, each up to 127 bytes. Only the entry for
 the account being authenticated is kept, but the whole file is parsed and

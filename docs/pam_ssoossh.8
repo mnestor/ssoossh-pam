@@ -248,8 +248,10 @@ certificate carrying the right principal, including one issued to somebody
 else's keypair.
 .IP 3. 4
 .B Principal
-\(em the certificate's principals authorise this local account, through
-the principals map when one is loaded, and by exact name otherwise.
+\(em the certificate's principals authorise this local account: by exact
+name always, and additionally through the principals map when one is
+loaded. The map only ever adds, so it cannot withhold an account its own
+name.
 .IP 4. 4
 .B Validity window
 \(em now is within
