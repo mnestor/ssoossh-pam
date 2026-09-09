@@ -250,10 +250,11 @@ int suite_checks(void)
             FILE *f = fdopen(fd, "w");
             if (f != NULL) {
                 /* deploy is authorized by the certificate's "ops"
-                 * principal, which is not the account name. locked is
-                 * listed with nothing, which grants nothing extra. */
+                 * principal, which is not the account name. locked and
+                 * alice are listed with nothing, which grants nothing
+                 * extra -- and, for alice, takes nothing away either. */
                 (void)fputs("deploy:\n  - ops\nnobody:\n  - someone\n"
-                            "locked:\n",
+                            "locked:\nalice:\n",
                             f);
                 (void)fclose(f);
 
@@ -264,13 +265,20 @@ int suite_checks(void)
                 T_CHECK(!ssoossh_check_principal(&cert, "nobody", path));
                 /* An account the map never mentions still matches its own
                  * name: the map adds, it does not gate. */
-                T_CHECK(ssoossh_check_principal(&cert, "alice", path));
+                T_CHECK(ssoossh_check_principal(&cert, "ops", path));
                 /* An account listed with an empty list is the same as an
                  * account that is absent -- it adds nothing, and it is not
                  * a way to lock the account out. Here the certificate
                  * carries no "locked" principal, so it is refused on the
                  * exact match, not by the entry. */
                 T_CHECK(!ssoossh_check_principal(&cert, "locked", path));
+                /* The other side of that, and the one an operator could
+                 * mistake for a deny: alice is listed with nothing, and
+                 * still matches her own name. An empty entry cannot take
+                 * an account its own principal away. `ssoossh host
+                 * principals` prints the same floor for the same file, so
+                 * sshd and this module read one file the same way. */
+                T_CHECK(ssoossh_check_principal(&cert, "alice", path));
             }
             (void)unlink(path);
         }
