@@ -46,7 +46,32 @@ not call it on install.
 RHEL, Alma, Rocky
 -----------------
 
-There is no equivalent here yet. authselect is the RHEL mechanism, and its
-features modify system-auth and password-auth, which carry the same
-shared-include problem as common-auth. Use the per-service fragments in
-../pam.d/ on those distributions.
+The rpm ships no equivalent, and that is deliberate rather than unfinished.
+
+authselect is the RHEL mechanism, and it owns system-auth and
+password-auth outright: after `authselect select`, /etc/pam.d/system-auth
+and /etc/pam.d/password-auth are symlinks into /etc/authselect/, rewritten
+from the profile on every `authselect apply-changes`. Those two files carry
+the same shared-include problem as common-auth, for the same reason -- so
+the module does not belong in them either way.
+
+The part that decides the packaging is that authselect has no drop-in.
+A profile's features are fixed by whoever wrote the profile: there is no
+way for a third party to add `with-ssoossh` the way this directory adds a
+pam-auth-update profile. The only ways in are a custom profile under
+/etc/authselect/custom or a vendor profile under
+/usr/share/authselect/vendor, and both are whole copies of a stock profile
+that then stop tracking its updates.
+
+A vendor profile in particular is not the rpm's version of the file in
+this directory, and the difference is the whole point. The profile at
+/usr/share/pam-configs/ssoossh does nothing until an administrator runs
+pam-auth-update and ticks it. A vendor profile overrides the stock profile
+of the same name, so an rpm dropping one in would shadow `sssd` on every
+host already using it, taking effect at the next regeneration, with nobody
+having opted in. Shipping nothing is what keeps the rpm to the same
+bargain the deb makes.
+
+Use the per-service fragments in ../pam.d/ on these distributions. They
+put the module only in the stacks you name, which is what you want here
+regardless of packaging.

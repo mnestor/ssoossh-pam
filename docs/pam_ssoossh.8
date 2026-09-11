@@ -368,13 +368,18 @@ the module into
 with everything the paragraph above says about that, which is why turning
 it on is left as a deliberate act. See
 .I /usr/share/doc/pam\-ssoossh/examples/pam\-configs/README
-before doing so. There is no
+before doing so. The rpm deliberately ships no
 .BR authselect (8)
-equivalent for the RHEL family: its features modify
+equivalent for the RHEL family. Its features modify
 .I system\-auth
 and
 .IR password\-auth ,
-which carry the same problem.
+which carry the same problem, and it has no drop\-in: a third party can
+only override a whole stock profile, which would take effect on hosts
+already using it without anyone opting in. Use the per\-service fragments
+in
+.I /usr/share/doc/pam\-ssoossh/examples/pam.d/
+there.
 .PP
 Test from a second, already\-open root session, never from the one whose
 service is being edited, and keep a copy of the file being changed.
