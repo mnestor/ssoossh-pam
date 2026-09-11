@@ -638,8 +638,16 @@ DOCDIR ?= /usr/local/share/doc/pam_ssoossh
 # deliberate cross-install into a DESTDIR for another host wants.
 PREFLIGHT ?= 1
 
+# docs/examples holds both files and subdirectories, and install(1) will
+# not copy a directory. Splitting them here rather than naming the
+# subdirectories means adding one does not silently break `make install` --
+# which is exactly how pam-configs/ broke it.
+EXAMPLE_DIRS  := $(patsubst %/,%,$(wildcard docs/examples/*/))
+EXAMPLE_FILES := $(filter-out $(EXAMPLE_DIRS),$(wildcard docs/examples/*))
+
 install: $(MODULE)
-	@test "$(PREFLIGHT)" = 0 || packaging/preflight.sh $(MODULE)
+	@test "$(PREFLIGHT)" = 0 || \
+	  SECURITYDIR="$(SECURITYDIR)" packaging/preflight.sh $(MODULE)
 	@test -n "$(SECURITYDIR)" || { \
 	  echo "install: no PAM module directory found on this system;" \
 	       "pass SECURITYDIR=<dir>" >&2; exit 1; }
@@ -648,9 +656,13 @@ install: $(MODULE)
 	install -d $(DESTDIR)$(MANDIR)/man8 $(DESTDIR)$(MANDIR)/man5
 	install -m 0644 docs/*.8 $(DESTDIR)$(MANDIR)/man8/
 	install -m 0644 docs/*.5 $(DESTDIR)$(MANDIR)/man5/
-	install -d $(DESTDIR)$(DOCDIR)/examples/pam.d
-	install -m 0644 docs/examples/pam.d/* $(DESTDIR)$(DOCDIR)/examples/pam.d/
-	install -m 0644 $(filter-out docs/examples/pam.d,$(wildcard docs/examples/*)) $(DESTDIR)$(DOCDIR)/examples/
+	install -d $(DESTDIR)$(DOCDIR)/examples
+	install -m 0644 $(EXAMPLE_FILES) $(DESTDIR)$(DOCDIR)/examples/
+	@set -e; for d in $(EXAMPLE_DIRS); do \
+	  echo "install -m 0644 $$d/* $(DESTDIR)$(DOCDIR)/examples/$${d##*/}/"; \
+	  install -d $(DESTDIR)$(DOCDIR)/examples/$${d##*/}; \
+	  install -m 0644 $$d/* $(DESTDIR)$(DOCDIR)/examples/$${d##*/}/; \
+	done
 	@echo "installed $(DESTDIR)$(SECURITYDIR)/$(MODULE)"
 	@echo "installed man pages under $(DESTDIR)$(MANDIR)"
 	@echo "installed examples under $(DESTDIR)$(DOCDIR)/examples"
