@@ -658,6 +658,17 @@ dnf install pam-ssoossh-selinux
 .fi
 .RE
 .PP
+It is published for EL 8 and EL 9 only, while the module itself is also
+published for EL 10. The rule in it was confirmed on Oracle Linux 9.8, and
+EL 10 carries a different generation of the base policy \-\-
+.B selinux-policy
+42 against EL 9's 38 \-\- so allowing a domain there on the strength of a
+denial seen on EL 9 would assert something nobody has observed. An EL 10
+host that needs it can build the shipped
+.I pam_ssoossh.te
+with the three commands below, and a denial reproduced there is worth
+reporting.
+.IP
 It installs at priority 200, the vendor slot, so a site's own module of
 the same name at the default 400 still takes precedence \-\- a package
 should not quietly overrule a local policy decision. One consequence is
