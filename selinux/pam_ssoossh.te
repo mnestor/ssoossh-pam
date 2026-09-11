@@ -42,21 +42,6 @@
 # it may not need, so domains we merely suspect are named in
 # pam_ssoossh(8) as untested rather than allowed here.
 #
-# sshd_t is confirmed but deliberately absent. The denial is real --
-# Oracle Linux 9.8, targeted policy, enforcing, comm="sshd-session"
-# (OpenSSH 9.8 split the per-connection worker out, so an audit search for
-# comm="sshd" finds nothing), with a permissive re-run showing a single
-# AVC and nothing denying after the name_connect. It is not allowed here
-# because the confirmation reaches only the connect and the polling after
-# it. The post-approval code -- validating the certificate and reading the
-# principals map, which is where a file-access denial would be -- could not
-# be exercised at the time, because the approval could not be completed
-# over ssh at all: the URL never arrived while the module was waiting,
-# since OpenSSH accumulates PAM_TEXT_INFO until a prompt or the end of the
-# conversation. The module now asks rather than tells for the sshd service
-# (see pam_ssoossh(8), SERVICES), so the whole path can be exercised in one
-# pass, and the rule goes in on that rather than on its first wall.
-#
 # crond_t is not one of those: it is not applicable. cronie calls
 # pam_acct_mgmt, pam_open_session and pam_setcred but never
 # pam_authenticate, so an auth-type module in /etc/pam.d/crond is
@@ -65,6 +50,23 @@
 # That stops being true the moment pam_ssoossh grows an account or
 # session entry point, so anyone adding one should retest crond rather
 # than inherit this note.
+#
+# THE STOCK BOOLEAN. The base policy already carries this access, behind
+# authlogin_yubikey, which is off by default:
+#
+#     allow login_pgm http_port_t:tcp_socket name_connect; [ authlogin_yubikey ]
+#
+# login_pgm holds local_login_t, remote_login_t, rlogind_t, rshd_t, sshd_t
+# and xdm_t on EL 9, plus cockpit_session_t on EL 8 and sshd_session_t on
+# EL 10 -- so `setsebool -P authlogin_yubikey on` is a supported
+# alternative to this module, from policy the distribution maintains. It
+# is named for a different authenticator; the access is the same one.
+#
+# This module exists alongside it, not instead of it, because it is
+# narrower: only the domains with a reproduced denial, rather than every
+# login domain at once. A site that would rather not install a
+# third-party policy module should use the boolean and is not worse off
+# for it. pam_ssoossh(8) says so too.
 #
 # PORTS. http_port_t is the label on 80, 443, 8080 and the other ports the
 # base policy already calls HTTP. An ssoosshd on a port outside that set
@@ -81,9 +83,38 @@ module pam_ssoossh 1.0.0;
 
 require {
     type local_login_t;
+    type sshd_t;
     type http_port_t;
     class tcp_socket name_connect;
 }
+
+# Remote login: sshd. Confirmed on Oracle Linux 9.8, targeted policy.
+# Enforcing, with no rule installed: two name_connect denials per attempt
+# (permissive=0, audit ...:848 and :849) and no login -- two rather than
+# one because a failing connect is retried across both address families,
+# a2=10 then a2=1c. Permissive, with the approval completed and a shell
+# reached (audit ...:800): one AVC for the whole attempt and nothing in
+# the window that is not name_connect.
+#
+# That permissive run is what makes one rule the whole answer here rather
+# than its first wall, and it reaches further than the local_login_t
+# evidence does: it completed an approval, so it exercised the code after
+# one -- validating the certificate against the CA and reading the
+# principals map, the two places a file-access denial would live. Neither
+# denied anything.
+#
+# The enforcing-and-completed run people ask for cannot exist. Without the
+# rule the connect is denied, so the approval is never reached; the
+# enforcing evidence above IS that experiment, and its result is two
+# denials and no login. A completed approval under permissive, which logs
+# every denial that would have occurred without blocking any, is the only
+# form the positive evidence can take before the rule is installed.
+#
+# The denials name comm="sshd-session" and
+# exe=/usr/libexec/openssh/sshd-session: OpenSSH 9.8 split the
+# per-connection worker out, so an audit search for comm="sshd" on EL 9
+# finds nothing and reads as "no denial". The domain is still sshd_t.
+allow sshd_t http_port_t:tcp_socket name_connect;
 
 # Console login: /bin/login. Confirmed on Oracle Linux 9.8, targeted
 # policy, SELinux enforcing.
