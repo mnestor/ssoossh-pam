@@ -18,6 +18,12 @@
 # tarball for the same release -- the same property nfpm.yaml states for
 # the module itself.
 name: pam-ssoossh-selinux
+# package.sh sets PKG_ARCH to "all" here -- nfpm's spelling of noarch --
+# and to the real architecture for the module package. The payload is a
+# compiled policy module and two text files, none of which is machine
+# code. One consequence, handled in package.sh rather than here: a noarch
+# package must be built from one architecture's tarball only, or the two
+# builds of an EL major produce one NEVRA from two jobs.
 arch: ${PKG_ARCH}
 platform: linux
 version: ${PKG_VERSION}

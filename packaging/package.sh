@@ -225,9 +225,32 @@ done
 # without one is not an error: the policy needs checkpolicy and
 # policycoreutils at build time, which a cross-build host or a developer's
 # laptop need not have, and the module package is complete without it.
+#
+# noarch, and therefore built from one architecture's tarball only.
+#
+# The payload is a compiled policy module and two text files, none of which
+# is machine code, so the package is genuinely noarch and saying x86_64
+# would be a lie that makes a repository carry it twice. But noarch means
+# the EL 9 x86_64 build and the EL 9 aarch64 build would produce one NEVRA
+# from two jobs, and their output is not byte-identical: nfpm stamps the
+# rpm's BUILDTIME from the clock, so two runs of this script three seconds
+# apart already differ. Two files with one NEVRA is the collision the dist
+# tag exists to prevent, arriving by another route -- and it would be
+# resolved by whichever job's artifact was unpacked last.
+#
+# So it is built from the canonical architecture and skipped on the other.
+# The other job's tarball still carries its own .pp, which is what makes
+# this safe to decide here rather than in the workflow: if the two majors
+# ever needed different policy the .pp would differ per major, which this
+# preserves, and only the per-architecture duplicate is dropped.
+SELINUX_PKG_ARCH=x86_64
 case " $formats " in
 *" rpm "*)
-    if [ -f "$stage/selinux/pam_ssoossh.pp" ]; then
+    if [ -f "$stage/selinux/pam_ssoossh.pp" ] &&
+       [ "$target_arch" != "$SELINUX_PKG_ARCH" ]; then
+        echo "package: pam-ssoossh-selinux is noarch and is built from the" \
+             "$SELINUX_PKG_ARCH tarball; skipping it for $target_arch"
+    elif [ -f "$stage/selinux/pam_ssoossh.pp" ]; then
         # A binary policy module will not load on a host whose policy is
         # older than the one it was compiled against, so the package says
         # so rather than letting semodule fail in postinstall. The version
@@ -246,11 +269,14 @@ case " $formats " in
         cp "$here/nfpm-selinux.yaml" "$stage/nfpm-selinux.yaml"
         cp "$here/selinux-postinstall.sh" "$here/selinux-postremove.sh" "$stage/"
         PKG_RELEASE=1$rpm_dist
+        # nfpm spells noarch "all". Set here rather than in the config so
+        # the module package above keeps the real architecture it needs.
+        PKG_ARCH=all
         export PKG_ARCH PKG_VERSION PKG_PRERELEASE PKG_MAINTAINER \
             PKG_HOMEPAGE PKG_GPG_KEY_FILE PKG_RELEASE
         (cd "$stage" && "$NFPM" package --config nfpm-selinux.yaml \
             --packager rpm \
-            --target "$outdir/pam-ssoossh-selinux_${filever}_${target_os}_${target_arch}.rpm")
+            --target "$outdir/pam-ssoossh-selinux_${filever}_${target_os}_noarch.rpm")
     elif [ -n "${PKG_REQUIRE_SELINUX:-}" ]; then
         # For a release. Shipping without the policy package is a silent
         # regression for every EL site: console login keeps failing and
