@@ -42,6 +42,15 @@
 # it may not need, so domains we merely suspect are named in
 # pam_ssoossh(8) as untested rather than allowed here.
 #
+# crond_t is not one of those: it is not applicable. cronie calls
+# pam_acct_mgmt, pam_open_session and pam_setcred but never
+# pam_authenticate, so an auth-type module in /etc/pam.d/crond is
+# unreachable code -- confirmed by running a job with the module in that
+# stack, enforcing and then permissive, with no denial in either window.
+# That stops being true the moment pam_ssoossh grows an account or
+# session entry point, so anyone adding one should retest crond rather
+# than inherit this note.
+#
 # PORTS. http_port_t is the label on 80, 443, 8080 and the other ports the
 # base policy already calls HTTP. An ssoosshd on a port outside that set
 # is denied identically, and the fix is to label the port rather than to

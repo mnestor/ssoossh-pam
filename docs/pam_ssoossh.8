@@ -566,12 +566,38 @@ if pam_ssoossh is added to
 .BR xdm_t ,
 for a graphical login;
 .BR cockpit_session_t ;
-.BR crond_t ;
 and confined callers of
 .BR su (1).
 These are named here as untested rather than allowed in the policy,
 because granting a domain network access on reasoning alone is how a
 policy module stops being reviewable.
+.PP
+.B crond
+is not applicable rather than untested.
+.BR cron (8)
+does not authenticate:
+.B cronie
+calls
+.BR pam_acct_mgmt (3),
+.BR pam_open_session (3)
+and
+.BR pam_setcred (3),
+never
+.BR pam_authenticate (3),
+so an
+.B auth
+module in
+.I /etc/pam.d/crond
+is never invoked and this one cannot run there at all. Confirmed by
+running a job with the module in that stack, enforcing and then
+permissive, with no denial in either window. That holds only while this
+module is auth\-only: an
+.B account
+or
+.B session
+entry point would make
+.B crond_t
+a live domain again and need retesting.
 .PP
 The rule permits connecting to
 .BR http_port_t ,
