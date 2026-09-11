@@ -341,6 +341,17 @@ is set. Public\-key logins are unaffected unless
 .B AuthenticationMethods
 requires both.
 .IP
+On an EL host with SELinux enforcing this needs policy before it works at
+all:
+.B sshd
+runs as
+.BR sshd_t ,
+which the shipped policy does not permit to open outbound TCP. Install
+.B pam-ssoossh-selinux
+or set the stock boolean \-\- see SELINUX. Confirmed twice over, on two
+hosts: one EL 9 host authenticates with SELinux permissive and fails with
+it enforcing, which leaves the policy as the only variable.
+.IP
 This service alone is asked rather than told: the approval URL arrives as
 a prompt ending
 .BR "Press Enter once you have approved it" ,
@@ -580,6 +591,61 @@ certificate authentication is unaffected: that path is
 with
 .B AuthorizedPrincipalsCommand
 and never enters PAM.
+.SS The stock boolean, instead of this package
+The base policy already carries the rule this module needs, behind a
+boolean that is off by default:
+.PP
+.RS
+.nf
+allow login_pgm http_port_t:tcp_socket name_connect; [ authlogin_yubikey ]
+.fi
+.RE
+.PP
+.B login_pgm
+is an attribute holding every domain that runs a login: on EL 9
+.BR local_login_t ,
+.BR remote_login_t ,
+.BR rlogind_t ,
+.BR rshd_t ,
+.B sshd_t
+and
+.BR xdm_t ,
+with
+.B cockpit_session_t
+in it on EL 8 and
+.B sshd_session_t
+on EL 10. So
+.PP
+.RS
+.nf
+setsebool \-P authlogin_yubikey on
+.fi
+.RE
+.PP
+grants what this package grants, from policy the distribution ships and
+supports, with no third\-party module to review or maintain. The boolean
+is named for a different authenticator, but the access it turns on is the
+same one: a login program reaching an HTTP authentication service.
+.PP
+Two reasons to prefer the package. It is narrower \-\- it names only the
+domains with a confirmed denial, where the boolean grants all of
+.B login_pgm
+at once, including
+.B rshd_t
+and
+.B rlogind_t
+on hosts old enough to have them. And it is versioned and removable as a
+package, where a boolean is host state that nothing records.
+.PP
+Two reasons to prefer the boolean. A site whose policy forbids
+third\-party modules can have this working today, with no exception to
+argue for. And it covers the domains in
+.B login_pgm
+that this policy does not name, including
+.B xdm_t
+and
+.BR cockpit_session_t ,
+without waiting for a denial to be reproduced on each.
 .SS Installing the policy
 The
 .B pam-ssoossh-selinux
@@ -641,22 +707,33 @@ and confined callers of
 .BR su (1).
 These are named here as untested rather than allowed in the policy,
 because granting a domain network access on reasoning alone is how a
-policy module stops being reviewable.
+policy module stops being reviewable. Each of them is in
+.BR login_pgm ,
+so
+.B authlogin_yubikey
+covers them today without this policy having to grow on reasoning, which
+is the better answer for a domain nobody has reproduced a denial on.
 .PP
 .B sshd_t
-is a separate case: the denial is confirmed \-\- Oracle Linux 9.8,
-targeted policy, enforcing, with a permissive re\-run showing nothing
-denies after the
+is in the policy, on evidence that reaches further than the
+.B local_login_t
+rule's. Oracle Linux 9.8, targeted policy. Enforcing with no rule
+installed: two
 .B name_connect
-\-\- and the rule is still not in the policy. The confirmation covers
-only the connect and the polling that follows it. The code after a
-completed approval, which validates the certificate and reads the
-principals map, is where any file\-access denial would be, and it could
-not be reached at the time: the approval could not be completed over
-.BR ssh (1)
-at all, because the URL never arrived in time. That is fixed (see
-SERVICES), so the whole path can now be exercised in one pass, and the
-rule goes in on that rather than on its first wall.
+denials per attempt and no login. Permissive with the approval completed
+and a shell reached: one AVC for the whole attempt, and nothing in the
+window that is not
+.BR name_connect .
+Because that run completed an approval it exercised the code after one \-\-
+validating the certificate against the CA and reading the principals map,
+the two places a file\-access denial would live. Neither denied anything.
+.IP
+The enforcing\-and\-completed run that sounds like better evidence cannot
+exist. Without the rule the connect is denied, so the approval is never
+reached; the enforcing result above is that experiment, and it ends in two
+denials and no login. A completed approval under permissive, which logs
+every denial that would have occurred without blocking any of them, is the
+only form the positive evidence can take before the rule is installed.
 .IP
 One trap when looking for those denials on EL 9: OpenSSH 9.8 split the
 per\-connection worker out of
