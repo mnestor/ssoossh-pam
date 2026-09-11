@@ -202,8 +202,9 @@ esac
 mkdir -p "$outdir"
 outdir=$(cd "$outdir" && pwd)
 for fmt in $formats; do
-    # Where this distribution's libpam looks. Discovered at install time
-    # by the Makefile; fixed per format here, since a package cannot look.
+    # Where this distribution's libpam looks, and the mode its own PAM
+    # modules carry there. Discovered at install time by the Makefile;
+    # fixed per format here, since a package cannot look.
     # The arch in the file name is the one that format's own tooling
     # expects to read there, and the one inside the package: deb says
     # amd64 where the tarball says x86_64.
@@ -215,16 +216,19 @@ for fmt in $formats; do
     case $fmt in
     deb)
         PKG_SECURITYDIR=/usr/lib/$multiarch/security
+        PKG_MODULE_MODE=0644
         fmt_arch=$PKG_ARCH
         dists=none
         ;;
     rpm)
         PKG_SECURITYDIR=/usr/lib64/security
+        PKG_MODULE_MODE=0755
         fmt_arch=$target_arch
         dists=$rpm_dists
         ;;
     apk)
         PKG_SECURITYDIR=/lib/security
+        PKG_MODULE_MODE=0755
         fmt_arch=$target_arch
         dists=none
         ;;
@@ -242,7 +246,9 @@ for fmt in $formats; do
         # The one substitution nfpm cannot do itself: the destination of
         # the module. Everything else in the config is expanded by nfpm
         # from the environment exported below.
-        sed "s|@SECURITYDIR@|$PKG_SECURITYDIR|g" "$here/nfpm.yaml" > "$stage/nfpm.yaml"
+        sed -e "s|@SECURITYDIR@|$PKG_SECURITYDIR|g" \
+            -e "s|@MODULE_MODE@|$PKG_MODULE_MODE|g" \
+            "$here/nfpm.yaml" > "$stage/nfpm.yaml"
         export PKG_ARCH PKG_VERSION PKG_PRERELEASE PKG_MAINTAINER PKG_HOMEPAGE \
             PKG_TARGET="$target" PKG_COMPAT="${compat:-unknown}" \
             PKG_CRYPTO_SO PKG_DEB_CRYPTO PKG_RELEASE \

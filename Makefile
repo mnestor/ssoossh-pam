@@ -520,6 +520,17 @@ DIST_NAME    := pam-ssoossh_$(DIST_VERSION)_$(DIST_TARGET)
 # checkpolicy and policycoreutils rather than selinux-policy-devel: the
 # policy needs no refpolicy interfaces, and the plain module form builds
 # from a much smaller set of packages. See selinux/pam_ssoossh.te.
+# The mode the module is installed with. dlopen needs read and not execute,
+# so every value here works; the distributions simply disagree about which
+# one a PAM module carries, and being the one file in the directory with a
+# different mode is what an auditor notices. RHEL and Alpine ship theirs
+# 0755, Debian ships theirs 0644. The packages pick per format in
+# packaging/package.sh, where the target is known; a source install cannot
+# know, so it keeps the more conservative value and takes an override:
+#
+#     make install MODULE_MODE=0755
+MODULE_MODE ?= 0644
+
 SELINUX_TE := selinux/pam_ssoossh.te
 # Every output name is derived from the .te's basename, and deliberately
 # not spelled out again. checkmodule refuses when the output basename
@@ -652,7 +663,7 @@ install: $(MODULE)
 	  echo "install: no PAM module directory found on this system;" \
 	       "pass SECURITYDIR=<dir>" >&2; exit 1; }
 	install -d $(DESTDIR)$(SECURITYDIR)
-	install -m 0644 $(MODULE) $(DESTDIR)$(SECURITYDIR)/$(MODULE)
+	install -m $(MODULE_MODE) $(MODULE) $(DESTDIR)$(SECURITYDIR)/$(MODULE)
 	install -d $(DESTDIR)$(MANDIR)/man8 $(DESTDIR)$(MANDIR)/man5
 	install -m 0644 docs/*.8 $(DESTDIR)$(MANDIR)/man8/
 	install -m 0644 docs/*.5 $(DESTDIR)$(MANDIR)/man5/

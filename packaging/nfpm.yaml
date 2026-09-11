@@ -38,7 +38,13 @@ contents:
   - src: pam_ssoossh.so
     dst: @SECURITYDIR@/pam_ssoossh.so
     file_info:
-      mode: 0644
+      # @MODULE_MODE@ too, because the distributions disagree and the
+      # neighbours are what an auditor compares against: RHEL and Alpine
+      # ship their PAM modules 0755, Debian ships them 0644. dlopen needs
+      # read and not execute, so this is convention rather than function --
+      # but being the one file in /usr/lib64/security with a different mode
+      # is what a scanner reports.
+      mode: @MODULE_MODE@
   - src: man/*.8.gz
     dst: /usr/share/man/man8/
     file_info:
@@ -108,7 +114,14 @@ overrides:
       - libc6 (>= 2.34)
   rpm:
     depends:
-      - pam
+      # Sonames only, deliberately no `pam`. The module dlopens libpam and
+      # needs nothing else from that package -- no helper binary, no
+      # pam.d file of its own -- so the soname below is the whole
+      # requirement, and it is satisfied on every EL major: by pam on 8 and
+      # 9, by pam-libs on 10, where PAM was split. Requiring `pam` by name
+      # was free on 8 and 9, whose base images carry it, and pulled pam,
+      # cracklib, cracklib-dicts, gdbm and libpwquality onto an EL 10 host
+      # that needed none of them.
       - ${PKG_CRYPTO_SO}()(64bit)
       - libcurl.so.4()(64bit)
       - libpam.so.0()(64bit)
