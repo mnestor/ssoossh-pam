@@ -555,6 +555,16 @@ dnf install pam-ssoossh-selinux
 .fi
 .RE
 .PP
+It installs at priority 200, the vendor slot, so a site's own module of
+the same name at the default 400 still takes precedence \-\- a package
+should not quietly overrule a local policy decision. One consequence is
+worth stating plainly: the rule below was confirmed on an enforcing host
+with
+.B semodule \-i
+at priority 400, and the priority 200 path the package uses has not been
+exercised enforcing. The policy is verified; its packaged delivery is
+not.
+.PP
 To build it instead, from the
 .I pam_ssoossh.te
 the package ships in

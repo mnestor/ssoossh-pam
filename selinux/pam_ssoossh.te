@@ -72,4 +72,12 @@ require {
 
 # Console login: /bin/login. Confirmed on Oracle Linux 9.8, targeted
 # policy, SELinux enforcing.
+#
+# That confirmation loaded the module by hand, with `semodule -i`, which
+# installs at the default priority 400. The rpm's postinstall uses
+# `semodule -X 200 -i` instead -- the vendor slot, so that a site's own
+# module of the same name at 400 still wins, which is not a decision a
+# package should take from an operator. Nothing has exercised the priority
+# 200 path on an enforcing host. The rule is confirmed; the packaged
+# delivery of it is not, and those are different claims.
 allow local_login_t http_port_t:tcp_socket name_connect;
