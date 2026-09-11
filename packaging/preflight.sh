@@ -119,4 +119,75 @@ if [ "$(uname -s)" = FreeBSD ] && [ -e /usr/lib/pam_ssoossh.so ]; then
     echo "           /usr/local/lib. Remove it unless it is deliberate."
 fi
 
+# The same failure on Linux, which has a different shape and a worse one.
+#
+# Linux-PAM resolves a bare module name in one compiled-in directory, not a
+# search path, so a second copy elsewhere is not shadowing in OpenPAM's
+# sense. What it is instead is a copy that whichever pam.d line names it
+# will load -- and which no package owns, so no upgrade replaces it and no
+# removal takes it away. An older module left behind by a build that
+# packaged it differently keeps authenticating, at its own version, with
+# its own bugs, indefinitely.
+#
+# Reported rather than refused, and reported per path rather than as a
+# count, because the operator has to decide which copy is the real one.
+# This says nothing about whether *this* module loads, which is what the
+# exit status means.
+if [ "$(uname -s)" = Linux ]; then
+    # Every directory a distribution has used for PAM modules: the two
+    # lib64 spellings, the multiarch ones Debian and Ubuntu use, and
+    # /usr/local for a build installed by hand.
+    secdirs="/lib/security /lib64/security /usr/lib/security
+             /usr/lib64/security /usr/local/lib/security
+             /usr/local/lib64/security"
+    for d in /usr/lib/*-linux-gnu*/security /usr/local/lib/*-linux-gnu*/security; do
+        [ -d "$d" ] && secdirs="$secdirs $d"
+    done
+
+    # The module being checked, resolved, so the copy we are installing is
+    # not reported as a stray against itself. Symlinked directories make
+    # this necessary: /lib64 is /usr/lib64 on a merged-usr host, so the
+    # same file is reachable by two paths.
+    self=$(cd "$(dirname "$module")" 2>/dev/null && pwd -P)/$(basename "$module")
+
+    # The directory this module is being installed into is not a stray: a
+    # copy there is the one about to be replaced. `make install` passes it;
+    # a deployer running this from an unpacked tarball has no such context,
+    # and then every copy is reported, which is the conservative answer.
+    dest=
+    if [ -n "${SECURITYDIR:-}" ] && [ -d "${SECURITYDIR}" ]; then
+        dest=$(cd "$SECURITYDIR" && pwd -P)
+    fi
+
+    strays=
+    for d in $secdirs; do
+        f=$d/pam_ssoossh.so
+        [ -e "$f" ] || continue
+        if [ -n "$dest" ]; then
+            dd=$(cd "$d" 2>/dev/null && pwd -P) || dd=
+            [ "$dd" = "$dest" ] && continue
+        fi
+        real=$(cd "$(dirname "$f")" 2>/dev/null && pwd -P)/pam_ssoossh.so
+        [ "$real" = "$self" ] && continue
+        # Two paths to one file is one module, not two.
+        case " $strays " in
+        *" $real "*) continue ;;
+        esac
+        strays="$strays $real"
+    done
+
+    if [ -n "$strays" ]; then
+        echo "preflight: warning: pam_ssoossh.so also exists outside the directory"
+        echo "           this module installs into:"
+        for f in $strays; do
+            echo "             $f"
+        done
+        echo "           A pam.d line naming the bare module loads whichever copy"
+        echo "           that service's libpam resolves to, and a copy no package"
+        echo "           owns is never upgraded and never removed. Remove the ones"
+        echo "           that are not deliberate, and prefer an absolute path in"
+        echo "           pam.d if you genuinely need two."
+    fi
+fi
+
 exit $status

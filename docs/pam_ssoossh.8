@@ -54,8 +54,12 @@ https://ssoossh.example.com/approve/6f1c0a5e\-1f2b\-4c3d\-8e9f\-0a1b2c3d4e5f
 .fi
 .RE
 .PP
-Nothing is read back. The login proceeds when someone with the right to
-approve it does so in the browser, or fails when they deny it, when
+Nothing is read back \(em with one exception, the
+.B sshd
+service, where the message is sent as a prompt and the answer discarded
+because OpenSSH will not show it otherwise. See SERVICES. Either way the
+login proceeds when someone with the right to approve it does so in the
+browser, or fails when they deny it, when
 .B timeout
 elapses, or when the person at the terminal presses Ctrl\-C.
 .SS The console flow
@@ -325,9 +329,7 @@ The same, after the
 line that lets root switch without authenticating.
 .TP
 .B sshd
-Works through keyboard\-interactive authentication, which is how
-.BR sshd (8)
-runs PAM and relays the module's message to the client. Needs
+Needs
 .B UsePAM yes
 and
 .B KbdInteractiveAuthentication yes
@@ -338,6 +340,41 @@ Always the browser flow, since
 is set. Public\-key logins are unaffected unless
 .B AuthenticationMethods
 requires both.
+.IP
+This service alone is asked rather than told: the approval URL arrives as
+a prompt ending
+.BR "Press Enter once you have approved it" ,
+and the answer is discarded. That is not a preference.  OpenSSH's
+keyboard\-interactive device accumulates
+.B PAM_TEXT_INFO
+and flushes it only when the conversation issues a prompt or when it ends
+\-\- see
+.I sshpam_query
+in OpenSSH's
+.IR auth\-pam.c ,
+where the text case is commented "accumulate messages" while only the
+.B PAM_PROMPT_ECHO_ON
+and
+.B PAM_PROMPT_ECHO_OFF
+cases return to the client. Displaying without ever asking, which is what
+every other service gets, put the URL in front of the user only after the
+module had given up waiting for them.
+.BR sudo (8)
+and the console write to the terminal as they go and are deliberately left
+alone, since a keypress they do not need would be a regression for the
+common case.
+.IP
+One consequence worth knowing: while the module is waiting at that prompt
+it is inside the conversation, so
+.B timeout
+is not what bounds it \-\-
+.B LoginGraceTime
+in
+.BR sshd_config (5)
+is, and it is 120 seconds by default. Time spent at the prompt does count
+against
+.BR timeout ,
+which resumes bounding the wait for the approval once Enter is pressed.
 .TP
 .BR login ", " getty
 A console login, so
@@ -353,6 +390,33 @@ Do not add the module to a shared include such as
 screen lockers, display managers and
 .BR polkit (8)
 read those too, and an approval prompt that cannot be seen is a lock\-out.
+.PP
+On Debian and Ubuntu the package installs a
+.BR pam\-auth\-update (8)
+profile at
+.I /usr/share/pam\-configs/ssoossh
+and does not enable it. Nothing in the package runs
+.BR pam\-auth\-update ,
+and the profile carries
+.B "Default: no"
+so a run triggered by another package leaves it off. Enabling it writes
+the module into
+.IR common\-auth ,
+with everything the paragraph above says about that, which is why turning
+it on is left as a deliberate act. See
+.I /usr/share/doc/pam\-ssoossh/examples/pam\-configs/README
+before doing so. The rpm deliberately ships no
+.BR authselect (8)
+equivalent for the RHEL family. Its features modify
+.I system\-auth
+and
+.IR password\-auth ,
+which carry the same problem, and it has no drop\-in: a third party can
+only override a whole stock profile, which would take effect on hosts
+already using it without anyone opting in. Use the per\-service fragments
+in
+.I /usr/share/doc/pam\-ssoossh/examples/pam.d/
+there.
 .PP
 Test from a second, already\-open root session, never from the one whose
 service is being edited, and keep a copy of the file being changed.
@@ -486,6 +550,192 @@ environment variables. Inside
 .BR sudo (8)
 those are normally scrubbed from the environment, so a host that needs a
 proxy for the module has to arrange it in the calling process.
+.SH SELINUX
+On a distribution with the targeted policy \(em Red Hat Enterprise Linux
+and its rebuilds, Fedora \(em some of the processes that run a PAM stack
+are confined domains with no outbound TCP, because nothing in the base
+system ever asked them for it. The module cannot connect from those
+domains until policy permits it.
+.PP
+The case every such host hits is console login.
+.BR login (1)
+runs as
+.BR local_login_t ,
+which the shipped policy does not permit to open outbound TCP, so
+pam_ssoossh fails at the console while working from
+.BR sudo (8),
+which is unconfined:
+.PP
+.RS
+.nf
+avc: denied { name_connect } for pid=1667 comm="login" dest=443
+  scontext=system_u:system_r:local_login_t:s0-s0:c0.c1023
+  tcontext=system_u:object_r:http_port_t:s0 tclass=tcp_socket
+.fi
+.RE
+.PP
+.BR sshd (8)
+certificate authentication is unaffected: that path is
+.B TrustedUserCAKeys
+with
+.B AuthorizedPrincipalsCommand
+and never enters PAM.
+.SS Installing the policy
+The
+.B pam-ssoossh-selinux
+package carries the module and loads it on install. It is a separate
+package, not a subpackage, so it must be installed and pinned explicitly:
+.PP
+.RS
+.nf
+dnf install pam-ssoossh-selinux
+.fi
+.RE
+.PP
+It installs at priority 200, the vendor slot, so a site's own module of
+the same name at the default 400 still takes precedence \-\- a package
+should not quietly overrule a local policy decision. One consequence is
+worth stating plainly: the rule below was confirmed on an enforcing host
+with
+.B semodule \-i
+at priority 400, and the priority 200 path the package uses has not been
+exercised enforcing. The policy is verified; its packaged delivery is
+not.
+.PP
+To build it instead, from the
+.I pam_ssoossh.te
+the package ships in
+.IR /usr/share/doc/pam-ssoossh-selinux/ :
+.PP
+.RS
+.nf
+checkmodule \-M \-m \-o pam_ssoossh.mod pam_ssoossh.te
+semodule_package \-o pam_ssoossh.pp \-m pam_ssoossh.mod
+semodule \-i pam_ssoossh.pp
+.fi
+.RE
+.PP
+That needs
+.B checkpolicy
+and
+.BR policycoreutils ,
+not
+.BR selinux\-policy\-devel :
+the policy uses no refpolicy interfaces. Note that
+.B checkmodule
+is not in
+.BR @core ,
+which matters when baking the module into a kickstart.
+.SS What it grants, and what it does not
+Outbound HTTP connect, and nothing else. No file access, no capabilities,
+no ability to listen. The domains it names can already resolve names
+through
+.BR nsswitch.conf (5).
+.PP
+Only domains with a confirmed denial are in it. A domain that runs a PAM
+stack and is confined will hit the same wall and is not covered:
+.BR xdm_t ,
+for a graphical login;
+.BR cockpit_session_t ;
+and confined callers of
+.BR su (1).
+These are named here as untested rather than allowed in the policy,
+because granting a domain network access on reasoning alone is how a
+policy module stops being reviewable.
+.PP
+.B sshd_t
+is a separate case: the denial is confirmed \-\- Oracle Linux 9.8,
+targeted policy, enforcing, with a permissive re\-run showing nothing
+denies after the
+.B name_connect
+\-\- and the rule is still not in the policy. The confirmation covers
+only the connect and the polling that follows it. The code after a
+completed approval, which validates the certificate and reads the
+principals map, is where any file\-access denial would be, and it could
+not be reached at the time: the approval could not be completed over
+.BR ssh (1)
+at all, because the URL never arrived in time. That is fixed (see
+SERVICES), so the whole path can now be exercised in one pass, and the
+rule goes in on that rather than on its first wall.
+.IP
+One trap when looking for those denials on EL 9: OpenSSH 9.8 split the
+per\-connection worker out of
+.BR sshd (8),
+so the AVCs name
+.B comm="sshd-session"
+and
+.IR exe=/usr/libexec/openssh/sshd\-session .
+The domain is still
+.BR sshd_t ,
+but an audit search for
+.B comm="sshd"
+finds nothing and reads as "no denial".
+.PP
+.B crond
+is not applicable rather than untested.
+.BR cron (8)
+does not authenticate:
+.B cronie
+calls
+.BR pam_acct_mgmt (3),
+.BR pam_open_session (3)
+and
+.BR pam_setcred (3),
+never
+.BR pam_authenticate (3),
+so an
+.B auth
+module in
+.I /etc/pam.d/crond
+is never invoked and this one cannot run there at all. Confirmed by
+running a job with the module in that stack, enforcing and then
+permissive, with no denial in either window. That holds only while this
+module is auth\-only: an
+.B account
+or
+.B session
+entry point would make
+.B crond_t
+a live domain again and need retesting.
+.PP
+The rule permits connecting to
+.BR http_port_t ,
+the label the base policy puts on 80, 443, 8080 and the rest. An
+.B ssoosshd
+on a port outside that set is denied identically. Label the port rather
+than widening the policy:
+.PP
+.RS
+.nf
+semanage port \-a \-t http_port_t \-p tcp 9443
+.fi
+.RE
+.SS Recognising it in the log
+A connection refused by local policy is reported as such, naming the
+errno:
+.PP
+.RS
+.nf
+pam_ssoossh: create call failed: Failed to connect to ssoossh.example
+  port 443: ... \-\- refused locally (EACCES), not by the network;
+  SELinux is enforcing on this host, so check `ausearch \-m avc \-ts
+  recent` for a denial from this service's domain, and local firewall
+  rules if there is none
+.fi
+.RE
+.PP
+The line names the check rather than the culprit on purpose.
+.B EACCES
+on connect is also what an
+.BR nftables (8)
+or
+.BR iptables (8)
+reject with
+.B icmp\-admin\-prohibited
+produces, and a host can have SELinux enforcing
+.I and
+an egress filter. Whether an AVC was logged is what separates the two, and
+it settles it in one command.
 .SH LOGGING
 Everything goes to
 .BR syslog (3)
@@ -630,6 +880,8 @@ auth    sufficient  pam_ssoossh.so server=https://ssoossh.example.com \\
 .SH SEE ALSO
 .BR pam_ssoossh\-ca (5),
 .BR pam_ssoossh\-principals (5),
+.BR semodule (8),
+.BR semanage\-port (8),
 .BR pam.conf (5),
 .BR pam.d (5),
 .BR pam (8),

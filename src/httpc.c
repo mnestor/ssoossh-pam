@@ -1,5 +1,6 @@
 #include "httpc.h"
 
+#include <errno.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -179,7 +180,103 @@ static bool tls_floor_ok(const tls_probe *probe, const char *url)
  *   the handle where curl accepts the pin, and armed for the after-the-fact
  *   check where it does not. Either way the callers just set it up here and
  *   ask tls_floor_ok afterwards. */
-static void apply_common(CURL *h, bool insecure, tls_probe *probe)
+/* Whether this host has SELinux enforcing, read straight from selinuxfs.
+ *
+ * Deliberately not libselinux: that would put a new shared-library
+ * dependency into a module whose whole packaging story is that it links
+ * only what the operating system already has resident in sudo. One byte
+ * from one pseudo-file answers the only question asked here, and a host
+ * without selinuxfs mounted simply reads as "no".
+ */
+static bool selinux_enforcing(void)
+{
+    FILE *f = fopen("/sys/fs/selinux/enforce", "re");
+    int c;
+
+    if (f == NULL) {
+        return false;
+    }
+    c = fgetc(f);
+    (void)fclose(f);
+    return c == '1';
+}
+
+/* Reports a transport failure with enough detail to act on.
+ *
+ * Two things used to hide the reason. It was logged at debug, so the only
+ * line an operator saw was the caller's "could not reach the ssoossh
+ * server" -- which sends people to DNS, firewalls and proxies. And the
+ * reason itself came from curl_easy_strerror, which renders
+ * CURLE_COULDNT_CONNECT as "Couldn't connect to server" with no errno in
+ * it, so the local refusal that actually happened was never captured at
+ * all. CURLOPT_ERRORBUFFER carries curl's own detailed text and
+ * CURLINFO_OS_ERRNO the errno behind it.
+ *
+ * The errno comes from CURLINFO_OS_ERRNO and not from the buffer's text,
+ * because that text is not stable across libcurl releases. 7.76 (EL 9's)
+ * renders a refused connect as "... : Permission denied", while 8.14
+ * renders the same failure as "... : Could not connect to server" with
+ * the errno nowhere in it -- measured, both with CURLE_COULDNT_CONNECT
+ * and OS_ERRNO set correctly. So the buffer is logged for its address and
+ * timing detail, and the errno alone decides what the line says. The
+ * symbolic name is printed rather than strerror's text, which keeps the
+ * line greppable and avoids strerror's thread-safety question inside
+ * sudo.
+ *
+ * A connect refused locally -- EACCES or EPERM -- is the case worth
+ * singling out: it is not a network problem, it will not heal on a retry,
+ * and on EL it is what a confined caller looks like. /bin/login runs as
+ * local_login_t, which the targeted policy does not permit to open
+ * outbound TCP, so console logins fail while sudo, unconfined, works.
+ *
+ * The message names the check rather than the culprit. EACCES on connect
+ * is also what an nftables or iptables REJECT with
+ * icmp-admin-prohibited produces, and a host can have SELinux enforcing
+ * *and* an egress filter -- so asserting SELinux from enforce=1 alone
+ * would send someone to audit2allow for a firewall problem, which is the
+ * same wrong turn in the other direction. Whether an AVC was logged
+ * settles it in one command, so that is what the line asks for.
+ *
+ * routine is for the events stream, where a dropped connection is
+ * expected and the caller reconnects; a local refusal is loud either way,
+ * because reconnecting will not fix it. */
+static void log_transport_failure(CURL *h, CURLcode rc, const char *errbuf,
+                                  bool routine, const char *what)
+{
+    const char *detail =
+        (errbuf != NULL && errbuf[0] != '\0') ? errbuf : curl_easy_strerror(rc);
+    long oserrno = 0;
+
+    curl_easy_getinfo(h, CURLINFO_OS_ERRNO, &oserrno);
+
+    if (oserrno == EACCES || oserrno == EPERM) {
+        const char *name = oserrno == EACCES ? "EACCES" : "EPERM";
+
+        if (selinux_enforcing()) {
+            ssoossh_errf("%s: %s -- refused locally (%s), not by the "
+                         "network; SELinux is enforcing on this host, so "
+                         "check `ausearch -m avc -ts recent` for a denial "
+                         "from this service's domain, and local firewall "
+                         "rules if there is none: see pam_ssoossh(8) "
+                         "SELINUX",
+                         what, detail, name);
+        } else {
+            ssoossh_errf("%s: %s -- refused locally (%s), not by the "
+                         "network; check local firewall rules",
+                         what, detail, name);
+        }
+        return;
+    }
+
+    if (routine) {
+        ssoossh_debugf("%s: %s", what, detail);
+    } else {
+        ssoossh_errf("%s: %s", what, detail);
+    }
+}
+
+static void apply_common(CURL *h, bool insecure, tls_probe *probe,
+                         char *errbuf)
 {
     static const char *const user_agent =
         "ssoossh-pam-c/" PAM_SSOOSSH_VERSION " (https://github.com/mnestor/"
@@ -187,6 +284,11 @@ static void apply_common(CURL *h, bool insecure, tls_probe *probe)
 
     curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 0L);
+    /* curl writes the detailed reason here; it has to outlive the
+     * transfer, and curl only writes on failure, so the caller clears it
+     * first and an empty buffer afterwards means "no detail, use
+     * curl_easy_strerror". */
+    curl_easy_setopt(h, CURLOPT_ERRORBUFFER, errbuf);
 #ifdef __APPLE__
     memset(probe, 0, sizeof(*probe));
     curl_easy_setopt(h, CURLOPT_VERBOSE, 1L);
@@ -278,6 +380,7 @@ ssoossh_http_result ssoossh_httpc_post_json(const char *url, const char *body,
     ssoossh_http_result result = SSOOSSH_HTTP_INTERNAL;
     CURLcode rc;
     tls_probe probe;
+    char errbuf[CURL_ERROR_SIZE] = {0};
 
     *resp_len = 0;
     *status = 0;
@@ -300,7 +403,7 @@ ssoossh_http_result ssoossh_httpc_post_json(const char *url, const char *body,
         return SSOOSSH_HTTP_INTERNAL;
     }
 
-    apply_common(h, insecure, &probe);
+    apply_common(h, insecure, &probe, errbuf);
     curl_easy_setopt(h, CURLOPT_URL, url);
     curl_easy_setopt(h, CURLOPT_POST, 1L);
     curl_easy_setopt(h, CURLOPT_POSTFIELDS, body);
@@ -330,7 +433,7 @@ ssoossh_http_result ssoossh_httpc_post_json(const char *url, const char *body,
     } else if (sink.too_large) {
         result = SSOOSSH_HTTP_TOO_LARGE;
     } else {
-        ssoossh_debugf("create call failed: %s", curl_easy_strerror(rc));
+        log_transport_failure(h, rc, errbuf, false, "create call failed");
         result = SSOOSSH_HTTP_TRANSPORT;
     }
 
@@ -414,6 +517,7 @@ static ssoossh_http_result run_stream(const char *url, bool insecure,
     ssoossh_http_result result = SSOOSSH_HTTP_INTERNAL;
     int running = 1;
     tls_probe probe;
+    char errbuf[CURL_ERROR_SIZE] = {0};
 
     memset(&sc, 0, sizeof(sc));
     sc.sse = sse;
@@ -438,7 +542,7 @@ static ssoossh_http_result run_stream(const char *url, bool insecure,
         goto done;
     }
 
-    apply_common(h, insecure, &probe);
+    apply_common(h, insecure, &probe, errbuf);
     curl_easy_setopt(h, CURLOPT_URL, url);
     curl_easy_setopt(h, CURLOPT_HTTPGET, 1L);
     curl_easy_setopt(h, CURLOPT_HTTPHEADER, headers);
@@ -539,8 +643,8 @@ static ssoossh_http_result run_stream(const char *url, bool insecure,
             result = SSOOSSH_HTTP_STATUS;
         } else {
             if (rc != CURLE_OK) {
-                ssoossh_debugf("events stream ended: %s",
-                               curl_easy_strerror(rc));
+                log_transport_failure(h, rc, errbuf, true,
+                                      "events stream ended");
             }
             /* A clean end with no outcome is a dropped connection, which
              * the caller reconnects for. */

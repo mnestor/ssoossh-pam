@@ -1,0 +1,85 @@
+# nfpm config for the SELinux policy package.
+#
+# Separate from nfpm.yaml, and a separate package rather than a
+# subpackage, because nfpm has no subpackage concept: one config produces
+# one package. On an EL system the conventional shape would be
+# pam-ssoossh-selinux built as a subpackage of pam-ssoossh from one spec,
+# and a site pinning versions should know this is not that -- it installs
+# and upgrades on its own, and nothing drags it in with the module.
+#
+# rpm only. The policy is for the targeted policy that Red Hat
+# Enterprise Linux, its rebuilds and Fedora ship. Debian and Alpine either
+# do not run SELinux by default or carry their own policy story, and a
+# package that installed a module nothing would load is worse than no
+# package.
+#
+# The payload is built by `make selinux` and carried through the release
+# tarball by `make dist`, so the .pp in the package is the one from the
+# tarball for the same release -- the same property nfpm.yaml states for
+# the module itself.
+name: pam-ssoossh-selinux
+# package.sh sets PKG_ARCH to "all" here -- nfpm's spelling of noarch --
+# and to the real architecture for the module package. The payload is a
+# compiled policy module and two text files, none of which is machine
+# code. One consequence, handled in package.sh rather than here: a noarch
+# package must be built from one architecture's tarball only, or the two
+# builds of an EL major produce one NEVRA from two jobs.
+arch: ${PKG_ARCH}
+platform: linux
+version: ${PKG_VERSION}
+release: ${PKG_RELEASE}
+prerelease: ${PKG_PRERELEASE}
+version_schema: semver
+section: admin
+priority: optional
+maintainer: ${PKG_MAINTAINER}
+vendor: ${PKG_MAINTAINER}
+homepage: ${PKG_HOMEPAGE}
+license: MIT
+description: |
+  SELinux policy for pam_ssoossh.
+  Permits the confined domains that run a PAM stack to open the outbound
+  HTTPS connection pam_ssoossh makes to ssoosshd. Without it, console
+  login fails on a targeted-policy host while sudo, unconfined, works.
+  Grants outbound HTTP connect and nothing else: see the shipped
+  pam_ssoossh.te for the policy source and the AVCs behind each rule.
+
+contents:
+  - src: selinux/pam_ssoossh.pp
+    dst: /usr/share/selinux/packages/pam-ssoossh/pam_ssoossh.pp
+    file_info:
+      mode: 0644
+  # The source travels with the binary policy deliberately. A site that
+  # will not install a compiled blob it cannot read can build this one
+  # itself and get the same module, and an operator reading an AVC wants
+  # the comments in it.
+  - src: selinux/pam_ssoossh.te
+    dst: /usr/share/doc/pam-ssoossh-selinux/pam_ssoossh.te
+    file_info:
+      mode: 0644
+  - src: LICENSE
+    dst: /usr/share/doc/pam-ssoossh-selinux/LICENSE
+    file_info:
+      mode: 0644
+
+overrides:
+  rpm:
+    depends:
+      # semodule lives in policycoreutils. The policy floor is the
+      # version this .pp was compiled against, recorded by `make selinux`
+      # on the host that built it: a binary policy module will not load
+      # on a host whose policy is older, and semodule failing in
+      # postinstall is a worse way to learn that than the solver
+      # refusing the install.
+      - policycoreutils
+      - ${PKG_SELINUX_POLICY}
+
+scripts:
+  postinstall: selinux-postinstall.sh
+  postremove: selinux-postremove.sh
+
+rpm:
+  summary: SELinux policy for pam_ssoossh
+  group: System Environment/Base
+  signature:
+    key_file: ${PKG_GPG_KEY_FILE}

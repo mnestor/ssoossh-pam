@@ -205,7 +205,7 @@ endif
 
 .PHONY: all clean check-symbols check-stdio check-size test san install unsanitised \
         help cross lint plan-serve ci-local ci-list fuzz fuzz-run e2e \
-        differential
+        differential selinux
 
 all: $(MODULE)
 
@@ -513,6 +513,64 @@ DIST_TARGET  ?= $(shell tests/dist-target.sh)
 DIST_VERSION := $(VERSION:v%=%)
 DIST_NAME    := pam-ssoossh_$(DIST_VERSION)_$(DIST_TARGET)
 
+# The SELinux policy module. Only the targeted-policy distributions have
+# anything to load it, so this is never part of `all`: it is built when
+# asked, and `dist` picks up the result if it is there.
+#
+# checkpolicy and policycoreutils rather than selinux-policy-devel: the
+# policy needs no refpolicy interfaces, and the plain module form builds
+# from a much smaller set of packages. See selinux/pam_ssoossh.te.
+SELINUX_TE := selinux/pam_ssoossh.te
+# Every output name is derived from the .te's basename, and deliberately
+# not spelled out again. checkmodule refuses when the output basename
+# differs from the module name declared inside the .te --
+#
+#     checkmodule: Module name pam_ssoossh is different than the output
+#     base filename pr4
+#
+# -- so a build directory, a version suffix or an artifact naming scheme
+# that renamed the output would break the build in a way that reads like a
+# tooling fault rather than a naming one. Deriving it means the .te's
+# `module` line and every file made from it can only ever agree.
+SELINUX_NAME := $(basename $(notdir $(SELINUX_TE)))
+SELINUX_MOD := $(BUILD)/$(SELINUX_NAME).mod
+SELINUX_PP := $(BUILD)/$(SELINUX_NAME).pp
+SELINUX_VER := $(BUILD)/$(SELINUX_NAME).policyver
+
+selinux: $(SELINUX_PP)
+
+$(SELINUX_PP): $(SELINUX_TE) | $(BUILD)
+	@command -v checkmodule >/dev/null || { \
+	  echo "selinux: checkmodule not found; install checkpolicy" >&2; exit 1; }
+	@command -v semodule_package >/dev/null || { \
+	  echo "selinux: semodule_package not found; install policycoreutils" >&2; exit 1; }
+	@grep -q '^module $(SELINUX_NAME) ' $(SELINUX_TE) || { \
+	  echo "selinux: $(SELINUX_TE) does not declare 'module $(SELINUX_NAME)';" >&2; \
+	  echo "  checkmodule requires the module name and the file name to match" >&2; \
+	  exit 1; }
+	checkmodule -M -m -o $(SELINUX_MOD) $(SELINUX_TE)
+	semodule_package -o $@ -m $(SELINUX_MOD)
+	@rm -f $(SELINUX_MOD)
+	@# The policy this .pp was compiled against, recorded beside it so the
+	@# package can require at least that much. A binary policy module is
+	@# tied to the policy version libsepol wrote it with: installed on a
+	@# host whose selinux-policy is older, semodule refuses it, and the
+	@# package would otherwise have promised something it cannot deliver.
+	@# Recorded here rather than at packaging time because the .pp is
+	@# built where checkpolicy is -- an EL container -- and packaged
+	@# somewhere else entirely.
+	@ver=$$(rpm -q --qf '%{VERSION}-%{RELEASE}' selinux-policy 2>/dev/null); \
+	if [ -n "$$ver" ]; then \
+	  printf '%s\n' "$$ver" > $(SELINUX_VER); \
+	  echo "selinux: built against selinux-policy $$ver"; \
+	else \
+	  rm -f $(SELINUX_VER); \
+	  echo "selinux: cannot query selinux-policy here, so the package" >&2; \
+	  echo "  will carry no version floor; build the .pp on the EL" >&2; \
+	  echo "  release you are packaging for to get one" >&2; \
+	fi
+	@echo "selinux: $@"
+
 dist: unsanitised
 	@$(MAKE) --no-print-directory $(MODULE)
 	@set -e; \
@@ -527,6 +585,16 @@ dist: unsanitised
 	cp -R docs/examples/. "$$stage/examples/"; \
 	cp packaging/preflight.sh tests/dist-target.sh "$$stage/"; \
 	chmod 0755 "$$stage/preflight.sh" "$$stage/dist-target.sh"; \
+	if [ "$(UNAME)" = "Linux" ]; then \
+	  mkdir -p "$$stage/selinux"; \
+	  cp $(SELINUX_TE) "$$stage/selinux/"; \
+	  if [ -f $(SELINUX_PP) ]; then \
+	    cp $(SELINUX_PP) "$$stage/selinux/"; \
+	    if [ -f $(SELINUX_VER) ]; then cp $(SELINUX_VER) "$$stage/selinux/"; fi; \
+	  else \
+	    echo "dist: no $(SELINUX_PP); run 'make selinux' for the policy package" >&2; \
+	  fi; \
+	fi; \
 	{ \
 	  echo "package:   $(DIST_NAME)"; \
 	  echo "version:   $(VERSION)"; \
@@ -570,8 +638,16 @@ DOCDIR ?= /usr/local/share/doc/pam_ssoossh
 # deliberate cross-install into a DESTDIR for another host wants.
 PREFLIGHT ?= 1
 
+# docs/examples holds both files and subdirectories, and install(1) will
+# not copy a directory. Splitting them here rather than naming the
+# subdirectories means adding one does not silently break `make install` --
+# which is exactly how pam-configs/ broke it.
+EXAMPLE_DIRS  := $(patsubst %/,%,$(wildcard docs/examples/*/))
+EXAMPLE_FILES := $(filter-out $(EXAMPLE_DIRS),$(wildcard docs/examples/*))
+
 install: $(MODULE)
-	@test "$(PREFLIGHT)" = 0 || packaging/preflight.sh $(MODULE)
+	@test "$(PREFLIGHT)" = 0 || \
+	  SECURITYDIR="$(SECURITYDIR)" packaging/preflight.sh $(MODULE)
 	@test -n "$(SECURITYDIR)" || { \
 	  echo "install: no PAM module directory found on this system;" \
 	       "pass SECURITYDIR=<dir>" >&2; exit 1; }
@@ -580,9 +656,13 @@ install: $(MODULE)
 	install -d $(DESTDIR)$(MANDIR)/man8 $(DESTDIR)$(MANDIR)/man5
 	install -m 0644 docs/*.8 $(DESTDIR)$(MANDIR)/man8/
 	install -m 0644 docs/*.5 $(DESTDIR)$(MANDIR)/man5/
-	install -d $(DESTDIR)$(DOCDIR)/examples/pam.d
-	install -m 0644 docs/examples/pam.d/* $(DESTDIR)$(DOCDIR)/examples/pam.d/
-	install -m 0644 $(filter-out docs/examples/pam.d,$(wildcard docs/examples/*)) $(DESTDIR)$(DOCDIR)/examples/
+	install -d $(DESTDIR)$(DOCDIR)/examples
+	install -m 0644 $(EXAMPLE_FILES) $(DESTDIR)$(DOCDIR)/examples/
+	@set -e; for d in $(EXAMPLE_DIRS); do \
+	  echo "install -m 0644 $$d/* $(DESTDIR)$(DOCDIR)/examples/$${d##*/}/"; \
+	  install -d $(DESTDIR)$(DOCDIR)/examples/$${d##*/}; \
+	  install -m 0644 $$d/* $(DESTDIR)$(DOCDIR)/examples/$${d##*/}/; \
+	done
 	@echo "installed $(DESTDIR)$(SECURITYDIR)/$(MODULE)"
 	@echo "installed man pages under $(DESTDIR)$(MANDIR)"
 	@echo "installed examples under $(DESTDIR)$(DOCDIR)/examples"

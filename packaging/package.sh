@@ -135,11 +135,26 @@ command -v "$NFPM" >/dev/null || {
 gzip -9n "$stage"/man/*.[58]
 pkg_version "$describe"
 
+# rpm_dist is the dist tag the rpm's Release carries, and it is what keeps
+# the two glibc variants apart.
+#
+# Without it both builds are pam-ssoossh-<version>-1.<arch>: the same NEVRA
+# with different libcrypto dependencies, which no repository can hold --
+# two packages with one NEVRA are one package as far as any repository is
+# concerned, and the one that lands last silently wins. The variants are
+# already aligned to EL major (release.yml builds openssl1.1 in almalinux:8
+# and openssl3 in almalinux:9), so the build's own EL major is the exact
+# discriminator, and a per-releasever repository files each where it
+# belongs.
+#
+# Only rpm gets one. In a Debian version 1.el9 would be a revision string
+# that sorts and reads wrong, and apk has no equivalent.
 case $target_os in
 linux-glibc-openssl3)
     formats="deb rpm"
     PKG_CRYPTO_SO=libcrypto.so.3
     PKG_DEB_CRYPTO="libssl3t64 | libssl3"
+    rpm_dist=.el9
     ;;
 linux-glibc-openssl1.1)
     # No deb: the distributions with libcrypto.so.1.1 and this glibc are
@@ -147,11 +162,13 @@ linux-glibc-openssl1.1)
     formats="rpm"
     PKG_CRYPTO_SO=libcrypto.so.1.1
     PKG_DEB_CRYPTO=
+    rpm_dist=.el8
     ;;
 linux-musl)
     formats="apk"
     PKG_CRYPTO_SO=libcrypto.so.3
     PKG_DEB_CRYPTO=
+    rpm_dist=
     ;;
 *)
     echo "package: no package format is defined for $target"
@@ -171,14 +188,17 @@ for fmt in $formats; do
     deb)
         PKG_SECURITYDIR=/usr/lib/$multiarch/security
         fmt_arch=$PKG_ARCH
+        PKG_RELEASE=1
         ;;
     rpm)
         PKG_SECURITYDIR=/usr/lib64/security
         fmt_arch=$target_arch
+        PKG_RELEASE=1$rpm_dist
         ;;
     apk)
         PKG_SECURITYDIR=/lib/security
         fmt_arch=$target_arch
+        PKG_RELEASE=1
         ;;
     esac
     # The one substitution nfpm cannot do itself: the destination of the
@@ -187,7 +207,7 @@ for fmt in $formats; do
     sed "s|@SECURITYDIR@|$PKG_SECURITYDIR|g" "$here/nfpm.yaml" > "$stage/nfpm.yaml"
     export PKG_ARCH PKG_VERSION PKG_PRERELEASE PKG_MAINTAINER PKG_HOMEPAGE \
         PKG_TARGET="$target" PKG_COMPAT="${compat:-unknown}" \
-        PKG_CRYPTO_SO PKG_DEB_CRYPTO \
+        PKG_CRYPTO_SO PKG_DEB_CRYPTO PKG_RELEASE \
         PKG_GPG_KEY_FILE PKG_APK_KEY_FILE
     # From inside the staging directory: nfpm resolves content sources
     # relative to the working directory.
@@ -196,3 +216,83 @@ for fmt in $formats; do
     (cd "$stage" && "$NFPM" package --config nfpm.yaml --packager "$fmt" \
         --target "$outdir/pam-ssoossh_${filever}_${target_os}_${fmt_arch}.$fmt")
 done
+
+# The SELinux policy package. rpm only -- the policy is for the targeted
+# policy that EL and Fedora ship, and see packaging/nfpm-selinux.yaml for
+# why this is a separate package rather than a subpackage.
+#
+# Built only when `make selinux` put a .pp in the tarball. A tarball
+# without one is not an error: the policy needs checkpolicy and
+# policycoreutils at build time, which a cross-build host or a developer's
+# laptop need not have, and the module package is complete without it.
+#
+# noarch, and therefore built from one architecture's tarball only.
+#
+# The payload is a compiled policy module and two text files, none of which
+# is machine code, so the package is genuinely noarch and saying x86_64
+# would be a lie that makes a repository carry it twice. But noarch means
+# the EL 9 x86_64 build and the EL 9 aarch64 build would produce one NEVRA
+# from two jobs, and their output is not byte-identical: nfpm stamps the
+# rpm's BUILDTIME from the clock, so two runs of this script three seconds
+# apart already differ. Two files with one NEVRA is the collision the dist
+# tag exists to prevent, arriving by another route -- and it would be
+# resolved by whichever job's artifact was unpacked last.
+#
+# So it is built from the canonical architecture and skipped on the other.
+# The other job's tarball still carries its own .pp, which is what makes
+# this safe to decide here rather than in the workflow: if the two majors
+# ever needed different policy the .pp would differ per major, which this
+# preserves, and only the per-architecture duplicate is dropped.
+SELINUX_PKG_ARCH=x86_64
+case " $formats " in
+*" rpm "*)
+    if [ -f "$stage/selinux/pam_ssoossh.pp" ] &&
+       [ "$target_arch" != "$SELINUX_PKG_ARCH" ]; then
+        echo "package: pam-ssoossh-selinux is noarch and is built from the" \
+             "$SELINUX_PKG_ARCH tarball; skipping it for $target_arch"
+    elif [ -f "$stage/selinux/pam_ssoossh.pp" ]; then
+        # A binary policy module will not load on a host whose policy is
+        # older than the one it was compiled against, so the package says
+        # so rather than letting semodule fail in postinstall. The version
+        # is whatever `make selinux` recorded on the host that built the
+        # .pp; without it the dependency is unversioned, which is honest
+        # about knowing nothing rather than guessing a floor.
+        vf=$stage/selinux/pam_ssoossh.policyver
+        if [ -s "$vf" ]; then
+            PKG_SELINUX_POLICY="selinux-policy-base >= $(cat "$vf")"
+        else
+            PKG_SELINUX_POLICY="selinux-policy-base"
+            echo "package: no recorded policy version; pam-ssoossh-selinux" \
+                 "will require selinux-policy-base with no floor" >&2
+        fi
+        export PKG_SELINUX_POLICY
+        cp "$here/nfpm-selinux.yaml" "$stage/nfpm-selinux.yaml"
+        cp "$here/selinux-postinstall.sh" "$here/selinux-postremove.sh" "$stage/"
+        PKG_RELEASE=1$rpm_dist
+        # nfpm spells noarch "all". Set here rather than in the config so
+        # the module package above keeps the real architecture it needs.
+        PKG_ARCH=all
+        export PKG_ARCH PKG_VERSION PKG_PRERELEASE PKG_MAINTAINER \
+            PKG_HOMEPAGE PKG_GPG_KEY_FILE PKG_RELEASE
+        (cd "$stage" && "$NFPM" package --config nfpm-selinux.yaml \
+            --packager rpm \
+            --target "$outdir/pam-ssoossh-selinux_${filever}_${target_os}_noarch.rpm")
+    elif [ -n "${PKG_REQUIRE_SELINUX:-}" ]; then
+        # For a release. Shipping without the policy package is a silent
+        # regression for every EL site: console login keeps failing and
+        # nothing in the release says why, so the release build asks to be
+        # stopped rather than to continue quietly.
+        echo "package: no selinux/pam_ssoossh.pp in $tarball" >&2
+        echo "  PKG_REQUIRE_SELINUX is set, so this is fatal." >&2
+        echo "  Build it with 'make selinux' before 'make dist'; that needs" >&2
+        echo "  checkpolicy and policycoreutils on the build host." >&2
+        exit 1
+    else
+        echo "package: WARNING: no selinux/pam_ssoossh.pp in $tarball" >&2
+        echo "  skipping pam-ssoossh-selinux. Console login stays broken on" >&2
+        echo "  EL hosts without it -- see pam_ssoossh(8), SELINUX." >&2
+        echo "  Build it with 'make selinux' before 'make dist', or set" >&2
+        echo "  PKG_REQUIRE_SELINUX=1 to make this an error." >&2
+    fi
+    ;;
+esac

@@ -1,0 +1,98 @@
+# SELinux policy for pam_ssoossh.
+#
+# The module opens an outbound HTTPS connection to ssoosshd from inside
+# whatever process is running the PAM stack. On a distribution with the
+# targeted policy -- Red Hat Enterprise Linux and its rebuilds, Fedora --
+# some of those processes are confined domains that the shipped policy
+# does not permit to talk to the network at all, because nothing in the
+# base system ever asked them to.
+#
+# The case every EL site hits is console login. /bin/login runs as
+# local_login_t, which has no outbound TCP, so pam_ssoossh fails there
+# while working perfectly from sudo:
+#
+#     avc: denied { name_connect } for pid=1667 comm="login" dest=443
+#       scontext=system_u:system_r:local_login_t:s0-s0:c0.c1023
+#       tcontext=system_u:object_r:http_port_t:s0 tclass=tcp_socket
+#
+# sudo is unaffected because it runs unconfined. sshd certificate
+# authentication is unaffected because that path is TrustedUserCAKeys plus
+# AuthorizedPrincipalsCommand and never enters PAM at all.
+#
+# Built with checkpolicy and policycoreutils, deliberately not with
+# selinux-policy-devel's refpolicy Makefile: this needs no interfaces, and
+# the plain module form builds from a much smaller set of packages.
+#
+#     make selinux              # or, by hand:
+#     checkmodule -M -m -o pam_ssoossh.mod pam_ssoossh.te
+#     semodule_package -o pam_ssoossh.pp -m pam_ssoossh.mod
+#     semodule -i pam_ssoossh.pp
+#
+# The output basename has to match the module name declared below;
+# checkmodule refuses otherwise ("Module name pam_ssoossh is different
+# than the output base filename ..."). So this file, the `module` line and
+# every artifact built from them share one name, and the Makefile derives
+# the output names rather than repeating them.
+#
+# SCOPE. Only domains with a confirmed AVC are listed. Every entry below
+# was reproduced on a real host and re-run in permissive mode to confirm
+# nothing denies *after* the name_connect -- that second run is what says
+# one rule is the whole answer for a domain rather than only its first
+# wall. Adding a domain on reasoning alone would grant it network access
+# it may not need, so domains we merely suspect are named in
+# pam_ssoossh(8) as untested rather than allowed here.
+#
+# sshd_t is confirmed but deliberately absent. The denial is real --
+# Oracle Linux 9.8, targeted policy, enforcing, comm="sshd-session"
+# (OpenSSH 9.8 split the per-connection worker out, so an audit search for
+# comm="sshd" finds nothing), with a permissive re-run showing a single
+# AVC and nothing denying after the name_connect. It is not allowed here
+# because the confirmation reaches only the connect and the polling after
+# it. The post-approval code -- validating the certificate and reading the
+# principals map, which is where a file-access denial would be -- could not
+# be exercised at the time, because the approval could not be completed
+# over ssh at all: the URL never arrived while the module was waiting,
+# since OpenSSH accumulates PAM_TEXT_INFO until a prompt or the end of the
+# conversation. The module now asks rather than tells for the sshd service
+# (see pam_ssoossh(8), SERVICES), so the whole path can be exercised in one
+# pass, and the rule goes in on that rather than on its first wall.
+#
+# crond_t is not one of those: it is not applicable. cronie calls
+# pam_acct_mgmt, pam_open_session and pam_setcred but never
+# pam_authenticate, so an auth-type module in /etc/pam.d/crond is
+# unreachable code -- confirmed by running a job with the module in that
+# stack, enforcing and then permissive, with no denial in either window.
+# That stops being true the moment pam_ssoossh grows an account or
+# session entry point, so anyone adding one should retest crond rather
+# than inherit this note.
+#
+# PORTS. http_port_t is the label on 80, 443, 8080 and the other ports the
+# base policy already calls HTTP. An ssoosshd on a port outside that set
+# is denied identically, and the fix is to label the port rather than to
+# widen this module:
+#
+#     semanage port -a -t http_port_t -p tcp 9443
+#
+# This grants outbound HTTP connect and nothing else -- no file access, no
+# capabilities, no ability to listen. The domains it names can already
+# resolve names through nsswitch.
+
+module pam_ssoossh 1.0.0;
+
+require {
+    type local_login_t;
+    type http_port_t;
+    class tcp_socket name_connect;
+}
+
+# Console login: /bin/login. Confirmed on Oracle Linux 9.8, targeted
+# policy, SELinux enforcing.
+#
+# That confirmation loaded the module by hand, with `semodule -i`, which
+# installs at the default priority 400. The rpm's postinstall uses
+# `semodule -X 200 -i` instead -- the vendor slot, so that a site's own
+# module of the same name at 400 still wins, which is not a decision a
+# package should take from an operator. Nothing has exercised the priority
+# 200 path on an enforcing host. The rule is confirmed; the packaged
+# delivery of it is not, and those are different claims.
+allow local_login_t http_port_t:tcp_socket name_connect;
