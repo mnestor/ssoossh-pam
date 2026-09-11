@@ -664,10 +664,16 @@ EL 10 carries a different generation of the base policy \-\-
 .B selinux-policy
 42 against EL 9's 38 \-\- so allowing a domain there on the strength of a
 denial seen on EL 9 would assert something nobody has observed. An EL 10
-host that needs it can build the shipped
+host that needs it has two answers that do not require this package:
+.B authlogin_yubikey
+above, which is stock policy and covers
+.B sshd_t
+and
+.B local_login_t
+there as it does everywhere else, or building the shipped
 .I pam_ssoossh.te
-with the three commands below, and a denial reproduced there is worth
-reporting.
+with the three commands below. A denial reproduced on EL 10 is worth
+reporting either way.
 .IP
 It installs at priority 200, the vendor slot, so a site's own module of
 the same name at the default 400 still takes precedence \-\- a package
