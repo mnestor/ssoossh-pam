@@ -47,15 +47,15 @@
 # (OpenSSH 9.8 split the per-connection worker out, so an audit search for
 # comm="sshd" finds nothing), with a permissive re-run showing a single
 # AVC and nothing denying after the name_connect. It is not allowed here
-# because the sshd service does not work for an unrelated reason: the
-# approval URL never reaches the client while the module waits, since
-# OpenSSH accumulates PAM_TEXT_INFO until a prompt or the end of the
-# conversation, and this module only ever displays. See pam_ssoossh(8),
-# SERVICES. Shipping the rule now would grant a domain network access for
-# a path nobody can use, and the confirmation reaches only the connect and
-# the polling after it -- the post-approval code could not be exercised,
-# because the approval cannot be completed over ssh. When the service
-# works, the whole path gets one pass and the rule goes in on that.
+# because the confirmation reaches only the connect and the polling after
+# it. The post-approval code -- validating the certificate and reading the
+# principals map, which is where a file-access denial would be -- could not
+# be exercised at the time, because the approval could not be completed
+# over ssh at all: the URL never arrived while the module was waiting,
+# since OpenSSH accumulates PAM_TEXT_INFO until a prompt or the end of the
+# conversation. The module now asks rather than tells for the sshd service
+# (see pam_ssoossh(8), SERVICES), so the whole path can be exercised in one
+# pass, and the rule goes in on that rather than on its first wall.
 #
 # crond_t is not one of those: it is not applicable. cronie calls
 # pam_acct_mgmt, pam_open_session and pam_setcred but never

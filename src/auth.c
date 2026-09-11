@@ -346,11 +346,59 @@ static bool join_url(char *dst, size_t dst_cap, const char *base,
     return true;
 }
 
+/* Does this service's conversation hold a PAM_TEXT_INFO back?
+ *
+ * OpenSSH's keyboard-interactive device does. sshpam_query() in
+ * auth-pam.c accumulates PAM_TEXT_INFO and PAM_ERROR_MSG into a buffer and
+ * stays in its receive loop; only PAM_PROMPT_ECHO_ON and
+ * PAM_PROMPT_ECHO_OFF make it return, which is what puts the accumulated
+ * text on the wire. The other way out is the end of the conversation. So a
+ * flow that displays and never asks cannot put the approval URL in front
+ * of someone over ssh until it has already given up waiting for them --
+ * the URL arrives with the failure, after the request has expired.
+ *
+ * Asking instead of telling is what forces it out, and the answer is
+ * thrown away: the prompt exists for its side effect on the transport, not
+ * for what the person types.
+ *
+ * By service rather than everywhere, because everywhere would be a
+ * regression for the flow almost everyone uses. sudo and a console login
+ * write to the terminal as they go and need no keypress; adding one there
+ * to fix ssh would make the common case worse to fix the broken one. */
+static bool conversation_defers_text(const ssoossh_request_context *ctx)
+{
+    return strcmp(ctx->service, "sshd") == 0;
+}
+
+/* Displays a->message, asking rather than telling where the conversation
+ * would otherwise swallow it until too late. The trailing line is part of
+ * the prompt rather than a separate message: one message is one round
+ * trip, and a second call would only be accumulated behind this one
+ * anyway. */
+static int show(pam_handle_t *pamh, const ssoossh_request_context *ctx,
+                attempt *a)
+{
+    size_t len;
+
+    if (!conversation_defers_text(ctx)) {
+        return ssoossh_conv(pamh, PAM_TEXT_INFO, a->message, NULL);
+    }
+
+    len = strlen(a->message);
+    (void)snprintf(a->message + len, sizeof(a->message) - len,
+                   "\n\nPress Enter once you have approved it: ");
+    /* ECHO_OFF rather than ECHO_ON: there is nothing to type, and an
+     * echoing prompt invites someone to paste something into it. The
+     * response is discarded -- passing NULL makes ssoossh_conv free it. */
+    return ssoossh_conv(pamh, PAM_PROMPT_ECHO_OFF, a->message, NULL);
+}
+
 /* Everything the module puts on a tty is assembled here and nowhere else,
  * so there is one place to look for "can a server put bytes on the
  * terminal". Each value is filtered by what it is, not by where it came
  * from. */
-static void show_browser_prompt(pam_handle_t *pamh, attempt *a)
+static void show_browser_prompt(pam_handle_t *pamh,
+                                const ssoossh_request_context *ctx, attempt *a)
 {
     size_t dropped;
     int rc;
@@ -366,7 +414,7 @@ static void show_browser_prompt(pam_handle_t *pamh, attempt *a)
     (void)snprintf(a->message, sizeof(a->message),
                    "Approve this request in your browser:\n%s", a->clean_url);
 
-    rc = ssoossh_conv(pamh, PAM_TEXT_INFO, a->message, NULL);
+    rc = show(pamh, ctx, a);
     if (rc != PAM_SUCCESS) {
         /* Not fatal: the request still resolves without the human having
          * seen the URL through this channel, and it is in the log below at
@@ -378,7 +426,8 @@ static void show_browser_prompt(pam_handle_t *pamh, attempt *a)
     ssoossh_debugf("approval URL: %s", a->clean_url);
 }
 
-static void show_console_prompt(pam_handle_t *pamh, attempt *a,
+static void show_console_prompt(pam_handle_t *pamh,
+                                const ssoossh_request_context *ctx, attempt *a,
                                 const char *server)
 {
     size_t len = 0;
@@ -426,7 +475,7 @@ static void show_console_prompt(pam_handle_t *pamh, attempt *a,
         }
     }
 
-    rc = ssoossh_conv(pamh, PAM_TEXT_INFO, a->message, NULL);
+    rc = show(pamh, ctx, a);
     if (rc != PAM_SUCCESS) {
         ssoossh_warnf("could not display the console code via the PAM "
                       "conversation: code %d",
@@ -657,7 +706,7 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
             rc = PAM_AUTHINFO_UNAVAIL;
             goto done;
         }
-        show_console_prompt(pamh, a, cfg->server);
+        show_console_prompt(pamh, &ctx, a, cfg->server);
     } else {
         if (a->approval_url[0] == '\0') {
             ssoossh_errf("the create response carried no approval URL");
@@ -674,7 +723,7 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
             rc = PAM_AUTHINFO_UNAVAIL;
             goto done;
         }
-        show_browser_prompt(pamh, a);
+        show_browser_prompt(pamh, &ctx, a);
     }
 
     if (!join_url(a->events_url, sizeof(a->events_url), cfg->server,

@@ -54,8 +54,12 @@ https://ssoossh.example.com/approve/6f1c0a5e\-1f2b\-4c3d\-8e9f\-0a1b2c3d4e5f
 .fi
 .RE
 .PP
-Nothing is read back. The login proceeds when someone with the right to
-approve it does so in the browser, or fails when they deny it, when
+Nothing is read back \(em with one exception, the
+.B sshd
+service, where the message is sent as a prompt and the answer discarded
+because OpenSSH will not show it otherwise. See SERVICES. Either way the
+login proceeds when someone with the right to approve it does so in the
+browser, or fails when they deny it, when
 .B timeout
 elapses, or when the person at the terminal presses Ctrl\-C.
 .SS The console flow
@@ -325,45 +329,52 @@ The same, after the
 line that lets root switch without authenticating.
 .TP
 .B sshd
-.B "Known not to work, as of this version."
-The module runs and the approval request is made, but the approval URL
-does not reach the client until after the module has stopped waiting, by
-which time the request has expired. Do not put the module in
-.I /etc/pam.d/sshd
-expecting a usable login.
-.IP
-The cause is in how
-.BR sshd (8)
-relays a PAM conversation.  OpenSSH's keyboard\-interactive device
-accumulates
-.B PAM_TEXT_INFO
-messages and flushes them only when the conversation issues a prompt, or
-when it ends \-\- see
-.I sshpam_query
-in OpenSSH's
-.IR auth\-pam.c ,
-where the text case is commented "accumulate messages" and only the
-.B PAM_PROMPT_ECHO_ON
-and
-.B PAM_PROMPT_ECHO_OFF
-cases return to the client. Both of this module's flows display with
-.B PAM_TEXT_INFO
-and never prompt, so nothing can appear while the module waits.
-.BR sudo (8)
-and the console are unaffected: their conversations write to the terminal
-as they go.
-.IP
-Whenever it is fixed, it will still need
+Needs
 .B UsePAM yes
 and
 .B KbdInteractiveAuthentication yes
 in
-.BR sshd_config (5),
-and it will be the browser flow, since
+.BR sshd_config (5).
+Always the browser flow, since
 .B PAM_RHOST
-is set. Public\-key logins are unaffected either way unless
+is set. Public\-key logins are unaffected unless
 .B AuthenticationMethods
 requires both.
+.IP
+This service alone is asked rather than told: the approval URL arrives as
+a prompt ending
+.BR "Press Enter once you have approved it" ,
+and the answer is discarded. That is not a preference.  OpenSSH's
+keyboard\-interactive device accumulates
+.B PAM_TEXT_INFO
+and flushes it only when the conversation issues a prompt or when it ends
+\-\- see
+.I sshpam_query
+in OpenSSH's
+.IR auth\-pam.c ,
+where the text case is commented "accumulate messages" while only the
+.B PAM_PROMPT_ECHO_ON
+and
+.B PAM_PROMPT_ECHO_OFF
+cases return to the client. Displaying without ever asking, which is what
+every other service gets, put the URL in front of the user only after the
+module had given up waiting for them.
+.BR sudo (8)
+and the console write to the terminal as they go and are deliberately left
+alone, since a keypress they do not need would be a regression for the
+common case.
+.IP
+One consequence worth knowing: while the module is waiting at that prompt
+it is inside the conversation, so
+.B timeout
+is not what bounds it \-\-
+.B LoginGraceTime
+in
+.BR sshd_config (5)
+is, and it is 120 seconds by default. Time spent at the prompt does count
+against
+.BR timeout ,
+which resumes bounding the wait for the approval once Enter is pressed.
 .TP
 .BR login ", " getty
 A console login, so
@@ -637,16 +648,15 @@ is a separate case: the denial is confirmed \-\- Oracle Linux 9.8,
 targeted policy, enforcing, with a permissive re\-run showing nothing
 denies after the
 .B name_connect
-\-\- but the rule is not in the policy, because the
-.B sshd
-service does not work for a different reason (see SERVICES). Adding it
-would ship policy for a path nobody can use, and the confirmation covers
-only the connect and the polling that follows it: the code after a
-completed approval could not be reached, since the approval cannot be
-completed over
-.BR ssh (1).
-When the service works, the whole path can be exercised in one pass and
-the rule added on that.
+\-\- and the rule is still not in the policy. The confirmation covers
+only the connect and the polling that follows it. The code after a
+completed approval, which validates the certificate and reads the
+principals map, is where any file\-access denial would be, and it could
+not be reached at the time: the approval could not be completed over
+.BR ssh (1)
+at all, because the URL never arrived in time. That is fixed (see
+SERVICES), so the whole path can now be exercised in one pass, and the
+rule goes in on that rather than on its first wall.
 .IP
 One trap when looking for those denials on EL 9: OpenSSH 9.8 split the
 per\-connection worker out of
