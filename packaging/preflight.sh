@@ -150,10 +150,23 @@ if [ "$(uname -s)" = Linux ]; then
     # same file is reachable by two paths.
     self=$(cd "$(dirname "$module")" 2>/dev/null && pwd -P)/$(basename "$module")
 
+    # The directory this module is being installed into is not a stray: a
+    # copy there is the one about to be replaced. `make install` passes it;
+    # a deployer running this from an unpacked tarball has no such context,
+    # and then every copy is reported, which is the conservative answer.
+    dest=
+    if [ -n "${SECURITYDIR:-}" ] && [ -d "${SECURITYDIR}" ]; then
+        dest=$(cd "$SECURITYDIR" && pwd -P)
+    fi
+
     strays=
     for d in $secdirs; do
         f=$d/pam_ssoossh.so
         [ -e "$f" ] || continue
+        if [ -n "$dest" ]; then
+            dd=$(cd "$d" 2>/dev/null && pwd -P) || dd=
+            [ "$dd" = "$dest" ] && continue
+        fi
         real=$(cd "$(dirname "$f")" 2>/dev/null && pwd -P)/pam_ssoossh.so
         [ "$real" = "$self" ] && continue
         # Two paths to one file is one module, not two.
