@@ -21,6 +21,7 @@ name: pam-ssoossh-selinux
 arch: ${PKG_ARCH}
 platform: linux
 version: ${PKG_VERSION}
+release: ${PKG_RELEASE}
 prerelease: ${PKG_PRERELEASE}
 version_schema: semver
 section: admin

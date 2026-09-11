@@ -135,11 +135,26 @@ command -v "$NFPM" >/dev/null || {
 gzip -9n "$stage"/man/*.[58]
 pkg_version "$describe"
 
+# rpm_dist is the dist tag the rpm's Release carries, and it is what keeps
+# the two glibc variants apart.
+#
+# Without it both builds are pam-ssoossh-<version>-1.<arch>: the same NEVRA
+# with different libcrypto dependencies, which no repository can hold --
+# two packages with one NEVRA are one package as far as any repository is
+# concerned, and the one that lands last silently wins. The variants are
+# already aligned to EL major (release.yml builds openssl1.1 in almalinux:8
+# and openssl3 in almalinux:9), so the build's own EL major is the exact
+# discriminator, and a per-releasever repository files each where it
+# belongs.
+#
+# Only rpm gets one. In a Debian version 1.el9 would be a revision string
+# that sorts and reads wrong, and apk has no equivalent.
 case $target_os in
 linux-glibc-openssl3)
     formats="deb rpm"
     PKG_CRYPTO_SO=libcrypto.so.3
     PKG_DEB_CRYPTO="libssl3t64 | libssl3"
+    rpm_dist=.el9
     ;;
 linux-glibc-openssl1.1)
     # No deb: the distributions with libcrypto.so.1.1 and this glibc are
@@ -147,11 +162,13 @@ linux-glibc-openssl1.1)
     formats="rpm"
     PKG_CRYPTO_SO=libcrypto.so.1.1
     PKG_DEB_CRYPTO=
+    rpm_dist=.el8
     ;;
 linux-musl)
     formats="apk"
     PKG_CRYPTO_SO=libcrypto.so.3
     PKG_DEB_CRYPTO=
+    rpm_dist=
     ;;
 *)
     echo "package: no package format is defined for $target"
@@ -171,14 +188,17 @@ for fmt in $formats; do
     deb)
         PKG_SECURITYDIR=/usr/lib/$multiarch/security
         fmt_arch=$PKG_ARCH
+        PKG_RELEASE=1
         ;;
     rpm)
         PKG_SECURITYDIR=/usr/lib64/security
         fmt_arch=$target_arch
+        PKG_RELEASE=1$rpm_dist
         ;;
     apk)
         PKG_SECURITYDIR=/lib/security
         fmt_arch=$target_arch
+        PKG_RELEASE=1
         ;;
     esac
     # The one substitution nfpm cannot do itself: the destination of the
@@ -187,7 +207,7 @@ for fmt in $formats; do
     sed "s|@SECURITYDIR@|$PKG_SECURITYDIR|g" "$here/nfpm.yaml" > "$stage/nfpm.yaml"
     export PKG_ARCH PKG_VERSION PKG_PRERELEASE PKG_MAINTAINER PKG_HOMEPAGE \
         PKG_TARGET="$target" PKG_COMPAT="${compat:-unknown}" \
-        PKG_CRYPTO_SO PKG_DEB_CRYPTO \
+        PKG_CRYPTO_SO PKG_DEB_CRYPTO PKG_RELEASE \
         PKG_GPG_KEY_FILE PKG_APK_KEY_FILE
     # From inside the staging directory: nfpm resolves content sources
     # relative to the working directory.
@@ -210,8 +230,9 @@ case " $formats " in
     if [ -f "$stage/selinux/pam_ssoossh.pp" ]; then
         cp "$here/nfpm-selinux.yaml" "$stage/nfpm-selinux.yaml"
         cp "$here/selinux-postinstall.sh" "$here/selinux-postremove.sh" "$stage/"
+        PKG_RELEASE=1$rpm_dist
         export PKG_ARCH PKG_VERSION PKG_PRERELEASE PKG_MAINTAINER \
-            PKG_HOMEPAGE PKG_GPG_KEY_FILE
+            PKG_HOMEPAGE PKG_GPG_KEY_FILE PKG_RELEASE
         (cd "$stage" && "$NFPM" package --config nfpm-selinux.yaml \
             --packager rpm \
             --target "$outdir/pam-ssoossh-selinux_${filever}_${target_os}_${target_arch}.rpm")

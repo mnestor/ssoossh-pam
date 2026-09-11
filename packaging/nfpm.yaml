@@ -12,6 +12,7 @@ name: pam-ssoossh
 arch: ${PKG_ARCH}
 platform: linux
 version: ${PKG_VERSION}
+release: ${PKG_RELEASE}
 prerelease: ${PKG_PRERELEASE}
 version_schema: semver
 section: admin
@@ -56,6 +57,26 @@ contents:
       mode: 0644
   - src: examples/README
     dst: /usr/share/doc/pam-ssoossh/examples/README
+    file_info:
+      mode: 0644
+  # Debian's pam-auth-update profile, installed where pam-auth-update
+  # looks for it and deliberately never enabled: no postinst runs
+  # pam-auth-update, and the profile carries "Default: no" so a run
+  # triggered by some other package leaves it off.
+  #
+  # It is not enabled for the deployer because pam-auth-update writes into
+  # common-auth, which screen lockers, display managers and polkit read --
+  # and an approval prompt nobody can see is a lock-out. The profile's
+  # Name field carries that warning into pam-auth-update's own menu, which
+  # is the only place the person turning it on is certain to look.
+  - src: examples/pam-configs/ssoossh
+    dst: /usr/share/pam-configs/ssoossh
+    packager: deb
+    file_info:
+      mode: 0644
+  - src: examples/pam-configs/README
+    dst: /usr/share/doc/pam-ssoossh/examples/pam-configs/README
+    packager: deb
     file_info:
       mode: 0644
   - src: BUILDINFO
