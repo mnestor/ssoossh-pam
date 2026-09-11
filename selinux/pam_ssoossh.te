@@ -1,0 +1,60 @@
+# SELinux policy for pam_ssoossh.
+#
+# The module opens an outbound HTTPS connection to ssoosshd from inside
+# whatever process is running the PAM stack. On a distribution with the
+# targeted policy -- Red Hat Enterprise Linux and its rebuilds, Fedora --
+# some of those processes are confined domains that the shipped policy
+# does not permit to talk to the network at all, because nothing in the
+# base system ever asked them to.
+#
+# The case every EL site hits is console login. /bin/login runs as
+# local_login_t, which has no outbound TCP, so pam_ssoossh fails there
+# while working perfectly from sudo:
+#
+#     avc: denied { name_connect } for pid=1667 comm="login" dest=443
+#       scontext=system_u:system_r:local_login_t:s0-s0:c0.c1023
+#       tcontext=system_u:object_r:http_port_t:s0 tclass=tcp_socket
+#
+# sudo is unaffected because it runs unconfined. sshd certificate
+# authentication is unaffected because that path is TrustedUserCAKeys plus
+# AuthorizedPrincipalsCommand and never enters PAM at all.
+#
+# Built with checkpolicy and policycoreutils, deliberately not with
+# selinux-policy-devel's refpolicy Makefile: this needs no interfaces, and
+# the plain module form builds from a much smaller set of packages.
+#
+#     make selinux              # or, by hand:
+#     checkmodule -M -m -o pam_ssoossh.mod pam_ssoossh.te
+#     semodule_package -o pam_ssoossh.pp -m pam_ssoossh.mod
+#     semodule -i pam_ssoossh.pp
+#
+# SCOPE. Only domains with a confirmed AVC are listed. Every entry below
+# was reproduced on a real host and re-run in permissive mode to confirm
+# nothing denies *after* the name_connect -- that second run is what says
+# one rule is the whole answer for a domain rather than only its first
+# wall. Adding a domain on reasoning alone would grant it network access
+# it may not need, so domains we merely suspect are named in
+# pam_ssoossh(8) as untested rather than allowed here.
+#
+# PORTS. http_port_t is the label on 80, 443, 8080 and the other ports the
+# base policy already calls HTTP. An ssoosshd on a port outside that set
+# is denied identically, and the fix is to label the port rather than to
+# widen this module:
+#
+#     semanage port -a -t http_port_t -p tcp 9443
+#
+# This grants outbound HTTP connect and nothing else -- no file access, no
+# capabilities, no ability to listen. The domains it names can already
+# resolve names through nsswitch.
+
+module pam_ssoossh 1.0.0;
+
+require {
+    type local_login_t;
+    type http_port_t;
+    class tcp_socket name_connect;
+}
+
+# Console login: /bin/login. Confirmed on Oracle Linux 9.8, targeted
+# policy, SELinux enforcing.
+allow local_login_t http_port_t:tcp_socket name_connect;

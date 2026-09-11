@@ -205,7 +205,7 @@ endif
 
 .PHONY: all clean check-symbols check-stdio check-size test san install unsanitised \
         help cross lint plan-serve ci-local ci-list fuzz fuzz-run e2e \
-        differential
+        differential selinux
 
 all: $(MODULE)
 
@@ -513,6 +513,28 @@ DIST_TARGET  ?= $(shell tests/dist-target.sh)
 DIST_VERSION := $(VERSION:v%=%)
 DIST_NAME    := pam-ssoossh_$(DIST_VERSION)_$(DIST_TARGET)
 
+# The SELinux policy module. Only the targeted-policy distributions have
+# anything to load it, so this is never part of `all`: it is built when
+# asked, and `dist` picks up the result if it is there.
+#
+# checkpolicy and policycoreutils rather than selinux-policy-devel: the
+# policy needs no refpolicy interfaces, and the plain module form builds
+# from a much smaller set of packages. See selinux/pam_ssoossh.te.
+SELINUX_TE := selinux/pam_ssoossh.te
+SELINUX_PP := $(BUILD)/pam_ssoossh.pp
+
+selinux: $(SELINUX_PP)
+
+$(SELINUX_PP): $(SELINUX_TE) | $(BUILD)
+	@command -v checkmodule >/dev/null || { \
+	  echo "selinux: checkmodule not found; install checkpolicy" >&2; exit 1; }
+	@command -v semodule_package >/dev/null || { \
+	  echo "selinux: semodule_package not found; install policycoreutils" >&2; exit 1; }
+	checkmodule -M -m -o $(BUILD)/pam_ssoossh.mod $(SELINUX_TE)
+	semodule_package -o $@ -m $(BUILD)/pam_ssoossh.mod
+	@rm -f $(BUILD)/pam_ssoossh.mod
+	@echo "selinux: $@"
+
 dist: unsanitised
 	@$(MAKE) --no-print-directory $(MODULE)
 	@set -e; \
@@ -527,6 +549,15 @@ dist: unsanitised
 	cp -R docs/examples/. "$$stage/examples/"; \
 	cp packaging/preflight.sh tests/dist-target.sh "$$stage/"; \
 	chmod 0755 "$$stage/preflight.sh" "$$stage/dist-target.sh"; \
+	if [ "$(UNAME)" = "Linux" ]; then \
+	  mkdir -p "$$stage/selinux"; \
+	  cp $(SELINUX_TE) "$$stage/selinux/"; \
+	  if [ -f $(SELINUX_PP) ]; then \
+	    cp $(SELINUX_PP) "$$stage/selinux/"; \
+	  else \
+	    echo "dist: no $(SELINUX_PP); run 'make selinux' for the policy package" >&2; \
+	  fi; \
+	fi; \
 	{ \
 	  echo "package:   $(DIST_NAME)"; \
 	  echo "version:   $(VERSION)"; \

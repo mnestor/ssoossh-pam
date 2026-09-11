@@ -486,6 +486,131 @@ environment variables. Inside
 .BR sudo (8)
 those are normally scrubbed from the environment, so a host that needs a
 proxy for the module has to arrange it in the calling process.
+.SH SELINUX
+On a distribution with the targeted policy \(em Red Hat Enterprise Linux
+and its rebuilds, Fedora \(em some of the processes that run a PAM stack
+are confined domains with no outbound TCP, because nothing in the base
+system ever asked them for it. The module cannot connect from those
+domains until policy permits it.
+.PP
+The case every such host hits is console login.
+.BR login (1)
+runs as
+.BR local_login_t ,
+which the shipped policy does not permit to open outbound TCP, so
+pam_ssoossh fails at the console while working from
+.BR sudo (8),
+which is unconfined:
+.PP
+.RS
+.nf
+avc: denied { name_connect } for pid=1667 comm="login" dest=443
+  scontext=system_u:system_r:local_login_t:s0-s0:c0.c1023
+  tcontext=system_u:object_r:http_port_t:s0 tclass=tcp_socket
+.fi
+.RE
+.PP
+.BR sshd (8)
+certificate authentication is unaffected: that path is
+.B TrustedUserCAKeys
+with
+.B AuthorizedPrincipalsCommand
+and never enters PAM.
+.SS Installing the policy
+The
+.B pam-ssoossh-selinux
+package carries the module and loads it on install. It is a separate
+package, not a subpackage, so it must be installed and pinned explicitly:
+.PP
+.RS
+.nf
+dnf install pam-ssoossh-selinux
+.fi
+.RE
+.PP
+To build it instead, from the
+.I pam_ssoossh.te
+the package ships in
+.IR /usr/share/doc/pam-ssoossh-selinux/ :
+.PP
+.RS
+.nf
+checkmodule \-M \-m \-o pam_ssoossh.mod pam_ssoossh.te
+semodule_package \-o pam_ssoossh.pp \-m pam_ssoossh.mod
+semodule \-i pam_ssoossh.pp
+.fi
+.RE
+.PP
+That needs
+.B checkpolicy
+and
+.BR policycoreutils ,
+not
+.BR selinux\-policy\-devel :
+the policy uses no refpolicy interfaces. Note that
+.B checkmodule
+is not in
+.BR @core ,
+which matters when baking the module into a kickstart.
+.SS What it grants, and what it does not
+Outbound HTTP connect, and nothing else. No file access, no capabilities,
+no ability to listen. The domains it names can already resolve names
+through
+.BR nsswitch.conf (5).
+.PP
+Only domains with a confirmed denial are in it. A domain that runs a PAM
+stack and is confined will hit the same wall and is not covered:
+.BR sshd_t ,
+if pam_ssoossh is added to
+.IR /etc/pam.d/sshd ;
+.BR xdm_t ,
+for a graphical login;
+.BR cockpit_session_t ;
+.BR crond_t ;
+and confined callers of
+.BR su (1).
+These are named here as untested rather than allowed in the policy,
+because granting a domain network access on reasoning alone is how a
+policy module stops being reviewable.
+.PP
+The rule permits connecting to
+.BR http_port_t ,
+the label the base policy puts on 80, 443, 8080 and the rest. An
+.B ssoosshd
+on a port outside that set is denied identically. Label the port rather
+than widening the policy:
+.PP
+.RS
+.nf
+semanage port \-a \-t http_port_t \-p tcp 9443
+.fi
+.RE
+.SS Recognising it in the log
+A connection refused by local policy is reported as such, naming the
+errno:
+.PP
+.RS
+.nf
+pam_ssoossh: create call failed: Failed to connect to ssoossh.example
+  port 443: ... \-\- refused locally (EACCES), not by the network;
+  SELinux is enforcing on this host, so check `ausearch \-m avc \-ts
+  recent` for a denial from this service's domain, and local firewall
+  rules if there is none
+.fi
+.RE
+.PP
+The line names the check rather than the culprit on purpose.
+.B EACCES
+on connect is also what an
+.BR nftables (8)
+or
+.BR iptables (8)
+reject with
+.B icmp\-admin\-prohibited
+produces, and a host can have SELinux enforcing
+.I and
+an egress filter. Whether an AVC was logged is what separates the two, and
+it settles it in one command.
 .SH LOGGING
 Everything goes to
 .BR syslog (3)
@@ -630,6 +755,8 @@ auth    sufficient  pam_ssoossh.so server=https://ssoossh.example.com \\
 .SH SEE ALSO
 .BR pam_ssoossh\-ca (5),
 .BR pam_ssoossh\-principals (5),
+.BR semodule (8),
+.BR semanage\-port (8),
 .BR pam.conf (5),
 .BR pam.d (5),
 .BR pam (8),

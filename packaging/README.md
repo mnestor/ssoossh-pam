@@ -16,6 +16,9 @@ out and hands it to `pkg create`.
 | file | does |
 | --- | --- |
 | `nfpm.yaml` | what goes where, and what each format calls the libraries the module needs |
+| `nfpm-selinux.yaml` | the standalone `pam-ssoossh-selinux` rpm: the compiled policy, its source, and the `semodule` lifecycle |
+| `selinux-postinstall.sh` | loads the policy module on install and on upgrade |
+| `selinux-postremove.sh` | unloads it on removal, and deliberately not on upgrade |
 | `package.sh` | one tarball in, its packages out: picks formats, module directory and soname by target; hands a macOS tarball to `macos.sh` and a FreeBSD one to `freebsd.sh` |
 | `macos.sh` | one macOS tarball in, a signed and notarized `.pkg` out |
 | `macos/` | the installer's `Distribution.xml` (title, arm64 only, OS floor) and its welcome and readme panes |
@@ -144,6 +147,29 @@ or `snap`, whose version number `pkg-version(8)` takes as −1 against the
 implicit 0. Hence the literal `pre`, which does for a `pkg` version what
 `~` does for a deb one, and which is needed even for `3.gabc1234`: that
 begins with a digit and would otherwise sort *above* the tag it follows.
+
+## The SELinux package
+
+`pam-ssoossh-selinux` is built only for rpm, and only when the tarball
+carries `selinux/pam_ssoossh.pp` — which is what `make selinux` produces
+and `make dist` picks up. A tarball without one is not an error;
+`package.sh` says it is skipping the policy package and builds the rest.
+Building the payload needs `checkpolicy` and `policycoreutils` on the
+build host, so a release that should carry it needs those in the build
+image.
+
+It is a **separate package, not a subpackage**. nfpm has no subpackage
+concept — one config makes one package — so the conventional EL shape of
+`pam-ssoossh-selinux` built from `pam-ssoossh`'s spec is not available
+without abandoning nfpm. The practical consequence for a consumer is that
+nothing drags it in with the module: it has to be installed and pinned
+explicitly.
+
+```console
+$ make selinux && make dist && make packages
+$ rpm -qpl pam-ssoossh-selinux_*.rpm
+$ rpm -qp --scripts pam-ssoossh-selinux_*.rpm    # semodule -i / -r
+```
 
 ## Signing
 

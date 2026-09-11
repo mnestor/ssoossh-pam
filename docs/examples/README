@@ -39,3 +39,32 @@ Paths in these files are the conventional ones; nothing in the module
 fixes them. On macOS the module is named by absolute path, because the
 directory OpenPAM looks a bare name up in is protected by System Integrity
 Protection; pam.d/sudo_local shows the form.
+
+On RHEL, its rebuilds and Fedora: SELinux
+-----------------------------------------
+
+The targeted policy confines some of the processes that run a PAM stack,
+and a confined domain has no outbound TCP -- so the module cannot reach
+ssoosshd from it. Console login is the case every such host hits:
+/bin/login runs as local_login_t, so pam_ssoossh fails at the console
+while working from sudo, which is unconfined.
+
+The symptom is a fall-through to the password prompt with:
+
+  pam_ssoossh: could not reach the ssoossh server for the certificate request
+
+preceded by a line saying the connection was refused locally (EACCES).
+Install the policy:
+
+  dnf install pam-ssoossh-selinux
+
+That package is standalone, not a subpackage, so nothing pulls it in with
+pam-ssoossh -- install and pin it explicitly. It ships its own source as
+/usr/share/doc/pam-ssoossh-selinux/pam_ssoossh.te if you would rather
+build and review it yourself; see pam_ssoossh(8), section SELINUX, for
+that, for which domains are covered, and for what to do when ssoosshd
+listens on a port outside the http_port_t set.
+
+Test this before you rely on it. An SELinux denial and a firewall both
+surface as EACCES on connect, and `ausearch -m avc -ts recent` is what
+tells them apart.

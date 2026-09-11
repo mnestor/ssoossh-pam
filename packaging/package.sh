@@ -196,3 +196,28 @@ for fmt in $formats; do
     (cd "$stage" && "$NFPM" package --config nfpm.yaml --packager "$fmt" \
         --target "$outdir/pam-ssoossh_${filever}_${target_os}_${fmt_arch}.$fmt")
 done
+
+# The SELinux policy package. rpm only -- the policy is for the targeted
+# policy that EL and Fedora ship, and see packaging/nfpm-selinux.yaml for
+# why this is a separate package rather than a subpackage.
+#
+# Built only when `make selinux` put a .pp in the tarball. A tarball
+# without one is not an error: the policy needs checkpolicy and
+# policycoreutils at build time, which a cross-build host or a developer's
+# laptop need not have, and the module package is complete without it.
+case " $formats " in
+*" rpm "*)
+    if [ -f "$stage/selinux/pam_ssoossh.pp" ]; then
+        cp "$here/nfpm-selinux.yaml" "$stage/nfpm-selinux.yaml"
+        cp "$here/selinux-postinstall.sh" "$here/selinux-postremove.sh" "$stage/"
+        export PKG_ARCH PKG_VERSION PKG_PRERELEASE PKG_MAINTAINER \
+            PKG_HOMEPAGE PKG_GPG_KEY_FILE
+        (cd "$stage" && "$NFPM" package --config nfpm-selinux.yaml \
+            --packager rpm \
+            --target "$outdir/pam-ssoossh-selinux_${filever}_${target_os}_${target_arch}.rpm")
+    else
+        echo "package: no selinux/pam_ssoossh.pp in $tarball;" \
+             "skipping the policy package (build it with 'make selinux')"
+    fi
+    ;;
+esac
