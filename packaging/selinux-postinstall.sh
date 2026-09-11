@@ -15,11 +15,17 @@ PP=/usr/share/selinux/packages/pam-ssoossh/pam_ssoossh.pp
 # package installed and no module loaded.
 if ! command -v semodule >/dev/null 2>&1; then
     echo "pam-ssoossh-selinux: semodule not found; policy not loaded" >&2
-    echo "  install policycoreutils, then: semodule -i $PP" >&2
+    echo "  install policycoreutils, then: semodule -X 200 -i $PP" >&2
     exit 0
 fi
 
-if ! semodule -i "$PP"; then
+# Priority 200 is the vendor slot, which is what the EL
+# %selinux_modules_install macro uses. A site's own module of the same
+# name lives at the default 400 and therefore still wins: a package
+# installing at the default would silently override a local policy
+# decision, which is not ours to make. -r below must name the same
+# priority or it will not find this module.
+if ! semodule -X 200 -i "$PP"; then
     echo "pam-ssoossh-selinux: failed to load $PP" >&2
     echo "  the module is installed but not active; pam_ssoossh will still" >&2
     echo "  be denied outbound TCP in confined domains such as login" >&2

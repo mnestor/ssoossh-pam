@@ -18,6 +18,8 @@ command -v semodule >/dev/null 2>&1 || exit 0
 # A module that is not loaded is not an error worth failing a removal
 # over: the host may have had SELinux disabled, or an operator may have
 # removed it by hand.
-semodule -r pam_ssoossh >/dev/null 2>&1 || true
+# -X 200 must match the priority postinstall used; without it semodule
+# looks in the default 400 slot and finds nothing to remove.
+semodule -X 200 -r pam_ssoossh >/dev/null 2>&1 || true
 
 exit 0

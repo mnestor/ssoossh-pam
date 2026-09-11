@@ -535,6 +535,7 @@ SELINUX_TE := selinux/pam_ssoossh.te
 SELINUX_NAME := $(basename $(notdir $(SELINUX_TE)))
 SELINUX_MOD := $(BUILD)/$(SELINUX_NAME).mod
 SELINUX_PP := $(BUILD)/$(SELINUX_NAME).pp
+SELINUX_VER := $(BUILD)/$(SELINUX_NAME).policyver
 
 selinux: $(SELINUX_PP)
 
@@ -550,6 +551,24 @@ $(SELINUX_PP): $(SELINUX_TE) | $(BUILD)
 	checkmodule -M -m -o $(SELINUX_MOD) $(SELINUX_TE)
 	semodule_package -o $@ -m $(SELINUX_MOD)
 	@rm -f $(SELINUX_MOD)
+	@# The policy this .pp was compiled against, recorded beside it so the
+	@# package can require at least that much. A binary policy module is
+	@# tied to the policy version libsepol wrote it with: installed on a
+	@# host whose selinux-policy is older, semodule refuses it, and the
+	@# package would otherwise have promised something it cannot deliver.
+	@# Recorded here rather than at packaging time because the .pp is
+	@# built where checkpolicy is -- an EL container -- and packaged
+	@# somewhere else entirely.
+	@ver=$$(rpm -q --qf '%{VERSION}-%{RELEASE}' selinux-policy 2>/dev/null); \
+	if [ -n "$$ver" ]; then \
+	  printf '%s\n' "$$ver" > $(SELINUX_VER); \
+	  echo "selinux: built against selinux-policy $$ver"; \
+	else \
+	  rm -f $(SELINUX_VER); \
+	  echo "selinux: cannot query selinux-policy here, so the package" >&2; \
+	  echo "  will carry no version floor; build the .pp on the EL" >&2; \
+	  echo "  release you are packaging for to get one" >&2; \
+	fi
 	@echo "selinux: $@"
 
 dist: unsanitised
@@ -571,6 +590,7 @@ dist: unsanitised
 	  cp $(SELINUX_TE) "$$stage/selinux/"; \
 	  if [ -f $(SELINUX_PP) ]; then \
 	    cp $(SELINUX_PP) "$$stage/selinux/"; \
+	    if [ -f $(SELINUX_VER) ]; then cp $(SELINUX_VER) "$$stage/selinux/"; fi; \
 	  else \
 	    echo "dist: no $(SELINUX_PP); run 'make selinux' for the policy package" >&2; \
 	  fi; \

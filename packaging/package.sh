@@ -228,6 +228,21 @@ done
 case " $formats " in
 *" rpm "*)
     if [ -f "$stage/selinux/pam_ssoossh.pp" ]; then
+        # A binary policy module will not load on a host whose policy is
+        # older than the one it was compiled against, so the package says
+        # so rather than letting semodule fail in postinstall. The version
+        # is whatever `make selinux` recorded on the host that built the
+        # .pp; without it the dependency is unversioned, which is honest
+        # about knowing nothing rather than guessing a floor.
+        vf=$stage/selinux/pam_ssoossh.policyver
+        if [ -s "$vf" ]; then
+            PKG_SELINUX_POLICY="selinux-policy-base >= $(cat "$vf")"
+        else
+            PKG_SELINUX_POLICY="selinux-policy-base"
+            echo "package: no recorded policy version; pam-ssoossh-selinux" \
+                 "will require selinux-policy-base with no floor" >&2
+        fi
+        export PKG_SELINUX_POLICY
         cp "$here/nfpm-selinux.yaml" "$stage/nfpm-selinux.yaml"
         cp "$here/selinux-postinstall.sh" "$here/selinux-postremove.sh" "$stage/"
         PKG_RELEASE=1$rpm_dist
