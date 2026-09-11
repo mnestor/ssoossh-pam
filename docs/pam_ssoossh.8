@@ -325,17 +325,43 @@ The same, after the
 line that lets root switch without authenticating.
 .TP
 .B sshd
-Works through keyboard\-interactive authentication, which is how
+.B "Known not to work, as of this version."
+The module runs and the approval request is made, but the approval URL
+does not reach the client until after the module has stopped waiting, by
+which time the request has expired. Do not put the module in
+.I /etc/pam.d/sshd
+expecting a usable login.
+.IP
+The cause is in how
 .BR sshd (8)
-runs PAM and relays the module's message to the client. Needs
+relays a PAM conversation.  OpenSSH's keyboard\-interactive device
+accumulates
+.B PAM_TEXT_INFO
+messages and flushes them only when the conversation issues a prompt, or
+when it ends \-\- see
+.I sshpam_query
+in OpenSSH's
+.IR auth\-pam.c ,
+where the text case is commented "accumulate messages" and only the
+.B PAM_PROMPT_ECHO_ON
+and
+.B PAM_PROMPT_ECHO_OFF
+cases return to the client. Both of this module's flows display with
+.B PAM_TEXT_INFO
+and never prompt, so nothing can appear while the module waits.
+.BR sudo (8)
+and the console are unaffected: their conversations write to the terminal
+as they go.
+.IP
+Whenever it is fixed, it will still need
 .B UsePAM yes
 and
 .B KbdInteractiveAuthentication yes
 in
-.BR sshd_config (5).
-Always the browser flow, since
+.BR sshd_config (5),
+and it will be the browser flow, since
 .B PAM_RHOST
-is set. Public\-key logins are unaffected unless
+is set. Public\-key logins are unaffected either way unless
 .B AuthenticationMethods
 requires both.
 .TP
@@ -597,9 +623,6 @@ through
 .PP
 Only domains with a confirmed denial are in it. A domain that runs a PAM
 stack and is confined will hit the same wall and is not covered:
-.BR sshd_t ,
-if pam_ssoossh is added to
-.IR /etc/pam.d/sshd ;
 .BR xdm_t ,
 for a graphical login;
 .BR cockpit_session_t ;
@@ -608,6 +631,35 @@ and confined callers of
 These are named here as untested rather than allowed in the policy,
 because granting a domain network access on reasoning alone is how a
 policy module stops being reviewable.
+.PP
+.B sshd_t
+is a separate case: the denial is confirmed \-\- Oracle Linux 9.8,
+targeted policy, enforcing, with a permissive re\-run showing nothing
+denies after the
+.B name_connect
+\-\- but the rule is not in the policy, because the
+.B sshd
+service does not work for a different reason (see SERVICES). Adding it
+would ship policy for a path nobody can use, and the confirmation covers
+only the connect and the polling that follows it: the code after a
+completed approval could not be reached, since the approval cannot be
+completed over
+.BR ssh (1).
+When the service works, the whole path can be exercised in one pass and
+the rule added on that.
+.IP
+One trap when looking for those denials on EL 9: OpenSSH 9.8 split the
+per\-connection worker out of
+.BR sshd (8),
+so the AVCs name
+.B comm="sshd-session"
+and
+.IR exe=/usr/libexec/openssh/sshd\-session .
+The domain is still
+.BR sshd_t ,
+but an audit search for
+.B comm="sshd"
+finds nothing and reads as "no denial".
 .PP
 .B crond
 is not applicable rather than untested.

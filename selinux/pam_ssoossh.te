@@ -42,6 +42,21 @@
 # it may not need, so domains we merely suspect are named in
 # pam_ssoossh(8) as untested rather than allowed here.
 #
+# sshd_t is confirmed but deliberately absent. The denial is real --
+# Oracle Linux 9.8, targeted policy, enforcing, comm="sshd-session"
+# (OpenSSH 9.8 split the per-connection worker out, so an audit search for
+# comm="sshd" finds nothing), with a permissive re-run showing a single
+# AVC and nothing denying after the name_connect. It is not allowed here
+# because the sshd service does not work for an unrelated reason: the
+# approval URL never reaches the client while the module waits, since
+# OpenSSH accumulates PAM_TEXT_INFO until a prompt or the end of the
+# conversation, and this module only ever displays. See pam_ssoossh(8),
+# SERVICES. Shipping the rule now would grant a domain network access for
+# a path nobody can use, and the confirmation reaches only the connect and
+# the polling after it -- the post-approval code could not be exercised,
+# because the approval cannot be completed over ssh. When the service
+# works, the whole path gets one pass and the rule goes in on that.
+#
 # crond_t is not one of those: it is not applicable. cronie calls
 # pam_acct_mgmt, pam_open_session and pam_setcred but never
 # pam_authenticate, so an auth-type module in /etc/pam.d/crond is
