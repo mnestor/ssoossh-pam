@@ -354,6 +354,28 @@ screen lockers, display managers and
 .BR polkit (8)
 read those too, and an approval prompt that cannot be seen is a lock\-out.
 .PP
+On Debian and Ubuntu the package installs a
+.BR pam\-auth\-update (8)
+profile at
+.I /usr/share/pam\-configs/ssoossh
+and does not enable it. Nothing in the package runs
+.BR pam\-auth\-update ,
+and the profile carries
+.B "Default: no"
+so a run triggered by another package leaves it off. Enabling it writes
+the module into
+.IR common\-auth ,
+with everything the paragraph above says about that, which is why turning
+it on is left as a deliberate act. See
+.I /usr/share/doc/pam\-ssoossh/examples/pam\-configs/README
+before doing so. There is no
+.BR authselect (8)
+equivalent for the RHEL family: its features modify
+.I system\-auth
+and
+.IR password\-auth ,
+which carry the same problem.
+.PP
 Test from a second, already\-open root session, never from the one whose
 service is being edited, and keep a copy of the file being changed.
 .SH PRINCIPALS

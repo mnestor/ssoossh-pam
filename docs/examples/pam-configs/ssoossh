@@ -1,0 +1,8 @@
+Name: ssoossh browser approval (NOT for desktops -- see pam_ssoossh(8))
+Default: no
+Priority: 704
+Auth-Type: Primary
+Auth:
+	[success=end default=ignore]	pam_ssoossh.so server=https://ssoossh.example.com trusted-ca-file=/etc/ssoossh/ca.pub principals-map=/etc/ssoossh/principals.yaml timeout=90s
+Auth-Initial:
+	[success=end default=ignore]	pam_ssoossh.so server=https://ssoossh.example.com trusted-ca-file=/etc/ssoossh/ca.pub principals-map=/etc/ssoossh/principals.yaml timeout=90s

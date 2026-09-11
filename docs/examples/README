@@ -9,6 +9,11 @@ pam.d/        one commented fragment per service: sudo, su, sshd, login,
               fragment goes on Debian and Ubuntu, RHEL and its rebuilds,
               Alpine, and a Mac.
 
+pam-configs/   the Debian pam-auth-update profile, plus a README saying
+              why the package installs it without enabling it. Not a
+              substitute for pam.d/ on any host with a desktop -- read
+              that README before you run pam-auth-update.
+
 principals.yaml
               a principals map to start from. Copy to
               /etc/ssoossh/principals.yaml and edit; see

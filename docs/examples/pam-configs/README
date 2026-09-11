@@ -1,0 +1,52 @@
+pam-auth-update profile for pam_ssoossh (Debian, Ubuntu)
+========================================================
+
+`ssoossh` is a pam-auth-update profile. The package installs it to
+/usr/share/pam-configs/ssoossh, where pam-auth-update can find it, and
+**never enables it**: nothing in the package runs pam-auth-update, and the
+profile carries `Default: no`, so a pam-auth-update run triggered by some
+other package leaves it switched off.
+
+Enabling it is a deliberate act:
+
+  sudoedit /usr/share/pam-configs/ssoossh     # set your own server first
+  sudo pam-auth-update                        # then tick "ssoossh browser approval"
+
+READ THIS BEFORE YOU ENABLE IT
+------------------------------
+
+pam-auth-update writes into /etc/pam.d/common-auth, and common-auth is
+read by every service that includes it -- including screen lockers,
+display managers and polkit. pam_ssoossh prints an approval URL and waits
+for someone to visit it. A screen locker has nowhere to print that URL and
+nowhere to take the approval, so on a machine with a graphical session
+this can leave a user unable to unlock their own screen.
+
+That is why pam_ssoossh(8) says not to put the module in a shared include,
+and why this profile exists but is not turned on for you. If your hosts
+are servers with no graphical session, the trade is usually fine. If any
+of them has a desktop on it, prefer the per-service fragments in
+../pam.d/, which put the module only in the stacks you choose.
+
+The profile is `Auth-Type: Primary` at priority 704 with
+`[success=end default=ignore]`, which is the pam-auth-update spelling of
+the `auth sufficient` line the per-service examples use: an approval ends
+the stack successfully, and anything else -- denied, timed out,
+cancelled, server unreachable -- falls through to the password prompt.
+
+Removing it
+-----------
+
+  sudo pam-auth-update --remove ssoossh
+
+Do that *before* removing the package if you enabled it. The package does
+not call pam-auth-update on removal either, for the same reason it does
+not call it on install.
+
+RHEL, Alma, Rocky
+-----------------
+
+There is no equivalent here yet. authselect is the RHEL mechanism, and its
+features modify system-auth and password-auth, which carry the same
+shared-include problem as common-auth. Use the per-service fragments in
+../pam.d/ on those distributions.
