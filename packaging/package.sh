@@ -3,7 +3,9 @@
 # nfpm, choosing the formats, the module directory and the dependencies
 # from the target the tarball was built for:
 #
-#   linux-glibc-openssl3_*     deb (Debian 12+, Ubuntu 22.04+) and rpm (EL 9+)
+#   linux-glibc-openssl3_*     deb (Debian 12+, Ubuntu 22.04+) and two rpms,
+#                              tagged .el9 and .el10 -- one build serves
+#                              both majors, see the dist tag notes below
 #   linux-glibc-openssl1.1_*   rpm (EL 8)
 #   linux-musl_*               apk (Alpine)
 #   freebsd*                   pkg, through freebsd.sh -- on FreeBSD only,
@@ -135,8 +137,8 @@ command -v "$NFPM" >/dev/null || {
 gzip -9n "$stage"/man/*.[58]
 pkg_version "$describe"
 
-# rpm_dist is the dist tag the rpm's Release carries, and it is what keeps
-# the two glibc variants apart.
+# The dist tag the rpm's Release carries, and what keeps the glibc variants
+# apart.
 #
 # Without it both builds are pam-ssoossh-<version>-1.<arch>: the same NEVRA
 # with different libcrypto dependencies, which no repository can hold --
@@ -147,14 +149,33 @@ pkg_version "$describe"
 # discriminator, and a per-releasever repository files each where it
 # belongs.
 #
-# Only rpm gets one. In a Debian version 1.el9 would be a revision string
-# that sorts and reads wrong, and apk has no equivalent.
+# Two variables, because one build can serve more than one EL major:
+#
+#   rpm_dist   the major this tarball was built on. The SELinux policy
+#              package uses this one, since its .pp and its recorded policy
+#              floor come from that host and are true of nowhere else.
+#   rpm_dists  every major the module is published for. The module rpm is
+#              built once per entry, identical but for the Release.
+#
+# EL 10 is served by the EL 9 build rather than by one of its own. Its
+# libcrypto soname is libcrypto.so.3, the same as EL 9, so dist-target.sh
+# names both linux-glibc-openssl3 and a separate row would collide on the
+# artifact name. More to the point it would be worse: EL 10 has glibc 2.39
+# against EL 9's 2.34, and glibc is forward compatible, so the EL 9 build
+# runs on EL 10 while an EL 10 build would not run on EL 9. Building
+# against the floor is what this repository already does everywhere else.
+# Verified rather than assumed: the EL 9 rpm installs on almalinux:10 and
+# every soname it links resolves there.
+#
+# Only rpm gets a dist tag. In a Debian version 1.el9 would be a revision
+# string that sorts and reads wrong, and apk has no equivalent.
 case $target_os in
 linux-glibc-openssl3)
     formats="deb rpm"
     PKG_CRYPTO_SO=libcrypto.so.3
     PKG_DEB_CRYPTO="libssl3t64 | libssl3"
     rpm_dist=.el9
+    rpm_dists=".el9 .el10"
     ;;
 linux-glibc-openssl1.1)
     # No deb: the distributions with libcrypto.so.1.1 and this glibc are
@@ -163,12 +184,14 @@ linux-glibc-openssl1.1)
     PKG_CRYPTO_SO=libcrypto.so.1.1
     PKG_DEB_CRYPTO=
     rpm_dist=.el8
+    rpm_dists=.el8
     ;;
 linux-musl)
     formats="apk"
     PKG_CRYPTO_SO=libcrypto.so.3
     PKG_DEB_CRYPTO=
     rpm_dist=
+    rpm_dists=
     ;;
 *)
     echo "package: no package format is defined for $target"
@@ -184,37 +207,54 @@ for fmt in $formats; do
     # The arch in the file name is the one that format's own tooling
     # expects to read there, and the one inside the package: deb says
     # amd64 where the tarball says x86_64.
+    #
+    # dists is what the format is built once per. Only rpm has more than
+    # one: "none" is the single unadorned build the other formats get, and
+    # is spelled rather than left empty because an empty list would run the
+    # inner loop zero times and silently produce no package.
     case $fmt in
     deb)
         PKG_SECURITYDIR=/usr/lib/$multiarch/security
         fmt_arch=$PKG_ARCH
-        PKG_RELEASE=1
+        dists=none
         ;;
     rpm)
         PKG_SECURITYDIR=/usr/lib64/security
         fmt_arch=$target_arch
-        PKG_RELEASE=1$rpm_dist
+        dists=$rpm_dists
         ;;
     apk)
         PKG_SECURITYDIR=/lib/security
         fmt_arch=$target_arch
-        PKG_RELEASE=1
+        dists=none
         ;;
     esac
-    # The one substitution nfpm cannot do itself: the destination of the
-    # module. Everything else in the config is expanded by nfpm from the
-    # environment exported below.
-    sed "s|@SECURITYDIR@|$PKG_SECURITYDIR|g" "$here/nfpm.yaml" > "$stage/nfpm.yaml"
-    export PKG_ARCH PKG_VERSION PKG_PRERELEASE PKG_MAINTAINER PKG_HOMEPAGE \
-        PKG_TARGET="$target" PKG_COMPAT="${compat:-unknown}" \
-        PKG_CRYPTO_SO PKG_DEB_CRYPTO PKG_RELEASE \
-        PKG_GPG_KEY_FILE PKG_APK_KEY_FILE
-    # From inside the staging directory: nfpm resolves content sources
-    # relative to the working directory.
-    # --target as a file, not a directory: nfpm would otherwise name the
-    # package its format's own way, which for rpm collides across targets.
-    (cd "$stage" && "$NFPM" package --config nfpm.yaml --packager "$fmt" \
-        --target "$outdir/pam-ssoossh_${filever}_${target_os}_${fmt_arch}.$fmt")
+    for d in $dists; do
+        # The dist tag is in the file name as well as in the Release,
+        # because two majors served by one build differ in nothing else:
+        # without it the EL 10 rpm would overwrite the EL 9 one on the way
+        # into the release, which is the same collision the tag exists to
+        # prevent, one level up.
+        case $d in
+        none) PKG_RELEASE=1; suffix= ;;
+        *) PKG_RELEASE=1$d; suffix=$d ;;
+        esac
+        # The one substitution nfpm cannot do itself: the destination of
+        # the module. Everything else in the config is expanded by nfpm
+        # from the environment exported below.
+        sed "s|@SECURITYDIR@|$PKG_SECURITYDIR|g" "$here/nfpm.yaml" > "$stage/nfpm.yaml"
+        export PKG_ARCH PKG_VERSION PKG_PRERELEASE PKG_MAINTAINER PKG_HOMEPAGE \
+            PKG_TARGET="$target" PKG_COMPAT="${compat:-unknown}" \
+            PKG_CRYPTO_SO PKG_DEB_CRYPTO PKG_RELEASE \
+            PKG_GPG_KEY_FILE PKG_APK_KEY_FILE
+        # From inside the staging directory: nfpm resolves content sources
+        # relative to the working directory.
+        # --target as a file, not a directory: nfpm would otherwise name
+        # the package its format's own way, which for rpm collides across
+        # targets.
+        (cd "$stage" && "$NFPM" package --config nfpm.yaml --packager "$fmt" \
+            --target "$outdir/pam-ssoossh_${filever}_${target_os}_${fmt_arch}${suffix}.$fmt")
+    done
 done
 
 # The SELinux policy package. rpm only -- the policy is for the targeted
@@ -225,6 +265,16 @@ done
 # without one is not an error: the policy needs checkpolicy and
 # policycoreutils at build time, which a cross-build host or a developer's
 # laptop need not have, and the module package is complete without it.
+#
+# EL 9 only, for the openssl3 build, even though the module rpm from the
+# same tarball is also published for EL 10. The policy is the one part that
+# does not travel: the .pp and the version floor beside it come from the
+# host that compiled them, and EL 10's base policy is a different
+# generation entirely -- selinux-policy 42.1.18 against EL 9's 38.1.75.
+# More importantly the rule itself was confirmed on Oracle Linux 9.8 and
+# nowhere else, and selinux/pam_ssoossh.te allows only domains with a
+# denial reproduced on a real host. Publishing it for EL 10 would assert
+# something nobody has observed there. See pam_ssoossh(8), SELINUX.
 #
 # noarch, and therefore built from one architecture's tarball only.
 #
