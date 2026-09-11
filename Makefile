@@ -521,7 +521,20 @@ DIST_NAME    := pam-ssoossh_$(DIST_VERSION)_$(DIST_TARGET)
 # policy needs no refpolicy interfaces, and the plain module form builds
 # from a much smaller set of packages. See selinux/pam_ssoossh.te.
 SELINUX_TE := selinux/pam_ssoossh.te
-SELINUX_PP := $(BUILD)/pam_ssoossh.pp
+# Every output name is derived from the .te's basename, and deliberately
+# not spelled out again. checkmodule refuses when the output basename
+# differs from the module name declared inside the .te --
+#
+#     checkmodule: Module name pam_ssoossh is different than the output
+#     base filename pr4
+#
+# -- so a build directory, a version suffix or an artifact naming scheme
+# that renamed the output would break the build in a way that reads like a
+# tooling fault rather than a naming one. Deriving it means the .te's
+# `module` line and every file made from it can only ever agree.
+SELINUX_NAME := $(basename $(notdir $(SELINUX_TE)))
+SELINUX_MOD := $(BUILD)/$(SELINUX_NAME).mod
+SELINUX_PP := $(BUILD)/$(SELINUX_NAME).pp
 
 selinux: $(SELINUX_PP)
 
@@ -530,9 +543,13 @@ $(SELINUX_PP): $(SELINUX_TE) | $(BUILD)
 	  echo "selinux: checkmodule not found; install checkpolicy" >&2; exit 1; }
 	@command -v semodule_package >/dev/null || { \
 	  echo "selinux: semodule_package not found; install policycoreutils" >&2; exit 1; }
-	checkmodule -M -m -o $(BUILD)/pam_ssoossh.mod $(SELINUX_TE)
-	semodule_package -o $@ -m $(BUILD)/pam_ssoossh.mod
-	@rm -f $(BUILD)/pam_ssoossh.mod
+	@grep -q '^module $(SELINUX_NAME) ' $(SELINUX_TE) || { \
+	  echo "selinux: $(SELINUX_TE) does not declare 'module $(SELINUX_NAME)';" >&2; \
+	  echo "  checkmodule requires the module name and the file name to match" >&2; \
+	  exit 1; }
+	checkmodule -M -m -o $(SELINUX_MOD) $(SELINUX_TE)
+	semodule_package -o $@ -m $(SELINUX_MOD)
+	@rm -f $(SELINUX_MOD)
 	@echo "selinux: $@"
 
 dist: unsanitised

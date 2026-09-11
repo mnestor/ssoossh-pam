@@ -215,9 +215,22 @@ case " $formats " in
         (cd "$stage" && "$NFPM" package --config nfpm-selinux.yaml \
             --packager rpm \
             --target "$outdir/pam-ssoossh-selinux_${filever}_${target_os}_${target_arch}.rpm")
+    elif [ -n "${PKG_REQUIRE_SELINUX:-}" ]; then
+        # For a release. Shipping without the policy package is a silent
+        # regression for every EL site: console login keeps failing and
+        # nothing in the release says why, so the release build asks to be
+        # stopped rather than to continue quietly.
+        echo "package: no selinux/pam_ssoossh.pp in $tarball" >&2
+        echo "  PKG_REQUIRE_SELINUX is set, so this is fatal." >&2
+        echo "  Build it with 'make selinux' before 'make dist'; that needs" >&2
+        echo "  checkpolicy and policycoreutils on the build host." >&2
+        exit 1
     else
-        echo "package: no selinux/pam_ssoossh.pp in $tarball;" \
-             "skipping the policy package (build it with 'make selinux')"
+        echo "package: WARNING: no selinux/pam_ssoossh.pp in $tarball" >&2
+        echo "  skipping pam-ssoossh-selinux. Console login stays broken on" >&2
+        echo "  EL hosts without it -- see pam_ssoossh(8), SELINUX." >&2
+        echo "  Build it with 'make selinux' before 'make dist', or set" >&2
+        echo "  PKG_REQUIRE_SELINUX=1 to make this an error." >&2
     fi
     ;;
 esac

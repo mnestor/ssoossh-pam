@@ -156,7 +156,18 @@ and `make dist` picks up. A tarball without one is not an error;
 `package.sh` says it is skipping the policy package and builds the rest.
 Building the payload needs `checkpolicy` and `policycoreutils` on the
 build host, so a release that should carry it needs those in the build
-image.
+image. Note `checkmodule` is **not** in EL's `@core` — it comes from
+`checkpolicy`.
+
+A missing `.pp` warns on stderr and continues, which is right for a
+laptop and wrong for a release: shipping without the policy package is a
+silent regression for every EL site, since console login keeps failing
+and nothing in the release says why. Set `PKG_REQUIRE_SELINUX=1` to make
+it fatal, and set it in the release workflow.
+
+```console
+$ PKG_REQUIRE_SELINUX=1 make packages    # refuses to ship without the policy
+```
 
 It is a **separate package, not a subpackage**. nfpm has no subpackage
 concept — one config makes one package — so the conventional EL shape of

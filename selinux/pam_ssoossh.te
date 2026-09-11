@@ -28,6 +28,12 @@
 #     semodule_package -o pam_ssoossh.pp -m pam_ssoossh.mod
 #     semodule -i pam_ssoossh.pp
 #
+# The output basename has to match the module name declared below;
+# checkmodule refuses otherwise ("Module name pam_ssoossh is different
+# than the output base filename ..."). So this file, the `module` line and
+# every artifact built from them share one name, and the Makefile derives
+# the output names rather than repeating them.
+#
 # SCOPE. Only domains with a confirmed AVC are listed. Every entry below
 # was reproduced on a real host and re-run in permissive mode to confirm
 # nothing denies *after* the name_connect -- that second run is what says
