@@ -284,6 +284,22 @@ pamtest_env=""
 # can carry a newline.
 pamtest_user=""
 
+# The module's lines in the log so far, as the module wrote them.
+#
+# On macOS that needs one step undone: the unified log hands each backslash
+# the module wrote back as \134, so a key ID logged as evil\x0a... is read here
+# as evil\134x0a... and no escaped pattern can match it. Undoing that one
+# octal escape is lossless -- the module writes a backslash only as the
+# start of \\, \" or \xNN, so a \134 in the stream is never its own text.
+# Elsewhere the sink or syslogd stores the line byte for byte.
+read_log() {
+    if [ "$os" = Darwin ]; then
+        grep -a pam_ssoossh "$logfile" 2>/dev/null | sed 's/\\134/\\/g'
+    else
+        grep -a pam_ssoossh "$logfile" 2>/dev/null
+    fi
+}
+
 # Reads back the module's syslog output, waiting up to two seconds for the
 # line a caller is looking for to land.
 #
@@ -296,7 +312,7 @@ await_log() {
     local want="$1" logged=""
 
     for _ in $(seq 1 20); do
-        logged="$(grep -a pam_ssoossh "$logfile" 2>/dev/null | tail -60 || true)"
+        logged="$(read_log | tail -60 || true)"
         if grep -qE "$want" <<< "$logged"; then
             break
         fi
@@ -614,12 +630,13 @@ for s in "${scenarios[@]}"; do
             15s ''
         pamtest_user=""
         printf '  %-18s ' "hostile-user-flow"
+        logged="$(read_log || true)"
         if grep -qE 'flow for games\\x0apam_ssoossh: successful authentication: root \(service=' \
-                "$logfile" 2>/dev/null; then
+                <<< "$logged"; then
             printf 'ok\n'
         else
             printf 'FAILED\n'
-            grep -a pam_ssoossh "$logfile" 2>/dev/null | tail -12 >&2 || true
+            printf '%s\n' "$logged" | tail -12 >&2
             failures=$((failures + 1))
         fi ;;
     principals-map)

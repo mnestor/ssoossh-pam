@@ -40,14 +40,14 @@
  * and unit gates, `make check-apple-spi` -- the Ed25519 SPI put through its
  * known-answer self-test against the running system, not just the SDK --
  * the stdio and size gates, and the end-to-end suite through a real PAM
- * stack. cross-platform.yml runs the same gates on macos-15, which is where
- * the floor itself is checked. v1.0.0 shipped a signed and notarized
- * installer built that way, and it has been run by hand on Apple silicon.
+ * stack. v1.0.0 shipped a signed and notarized installer built that way,
+ * and it has been run by hand on Apple silicon.
  *
- * What none of that covers is a change made since the last green run. The
- * Makefile compiles exactly one backend, so a Linux build says nothing
- * about this file: an edit here is unverified until the macOS job has had
- * it.
+ * ci.yml runs the same gates on every push and pull request, on macos-26
+ * and on macos-15, which is where the floor itself is checked. The
+ * Makefile compiles exactly one backend, so no Linux build says anything
+ * about this file: those two rows are the only check an edit here gets
+ * before it merges.
  * ==========================================================================
  */
 /* Before <string.h>: Apple declares memset_s only when this is set, and a

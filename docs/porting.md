@@ -13,19 +13,15 @@ This document is the sequence for driving either by hand: what to install,
 what to run, what is likely to break, and how to tell a real problem from an
 assumption that was simply wrong.
 
-What the pipeline does not give you is per-commit cover. Linux runs on every
-push; these two run at release time and on demand. The Makefile compiles
-exactly one crypto backend, so a green Linux build says nothing at all about
-`src/crypto_darwin.c` — an edit there is unverified until a macOS job has
-had it, and running one is the point of the workflow below.
-
-The same sequence runs unattended in
-[`.github/workflows/cross-platform.yml`](../.github/workflows/cross-platform.yml),
-behind `workflow_dispatch`:
+They are on every commit too. The same sequence runs unattended in
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) for every push
+and pull request, beside Linux: FreeBSD 14 and 15, and macOS on both
+macos-26 and macos-15. The Makefile compiles exactly one crypto backend, so
+a green Linux build says nothing at all about `src/crypto_darwin.c`, and
+those macOS rows are what does. For a branch with no pull request yet:
 
 ```console
-$ gh workflow run cross-platform.yml                # both
-$ gh workflow run cross-platform.yml -f job=macos   # one
+$ gh workflow run ci.yml --ref <branch>
 $ gh run watch
 ```
 
@@ -421,7 +417,7 @@ host sees it:
 | the symbols stay but behave differently | the next macOS, in a beta OS | the backend's self-test and the `ed25519` suite, on that OS |
 | the SPI becomes public API | the next SDK's headers | the same script, which fails with a note to switch to the header |
 
-**On every macOS CI run**, `cross-platform.yml` checks the SDK before
+**On every macOS CI run**, `ci.yml` checks the SDK before
 building and runs `make check-apple-spi` after the unit suite.
 
 **Weekly**, [`apple-drift.yml`](../.github/workflows/apple-drift.yml)
@@ -505,18 +501,26 @@ reach CryptoKit at all, and there is no Swift-to-C path.
 
 ## Turning these on in CI
 
-Both now pass, and both are wired into
-[`release.yml`](../.github/workflows/release.yml) rather than
-[`ci.yml`](../.github/workflows/ci.yml): a tagged build cannot publish
-without them, which is the failure that had to become interrupting. They
-are not on every push, because a hosted Mac and a FreeBSD VM per commit buy
-little on a tree whose platform-neutral half CI already covers.
+Both pass, and both are in [`ci.yml`](../.github/workflows/ci.yml) as
+well as [`release.yml`](../.github/workflows/release.yml): every push and
+pull request runs them, and a tagged build still cannot publish without
+them.
 
-`cross-platform.yml` stays for the two things the release job cannot do:
-running the gates on macos-15, where the deployment floor is actually
-checked rather than merely targeted, and giving an unmerged branch a macOS
-answer before it is tagged. Reach for it whenever you touch
-`src/crypto_darwin.c`.
+They were release-only at first, on the argument that a hosted Mac and a
+FreeBSD VM per commit buy little on a tree whose platform-neutral half CI
+already covers. `v1.4.0` ended that. Its new e2e scenarios passed on every
+Linux row, merged, were tagged — and stopped the release on macOS, because
+`log stream` hands each backslash back as `\134` and the harness's patterns
+were written for the `\x0a` the module logs. The module was right; the
+harness was not, and only a run on macOS could have said so. The
+platform-neutral half turned out to include the test suite's own platform
+code, and finding that out at the tag is finding it out after the merge.
+
+The macOS job runs on two runners for the reason `cross-platform.yml`, now
+gone, used to run on macos-15: the release builds on macos-26 for a floor
+of 15, so macos-26 is the release's own gates passing before the tag, and
+macos-15 is the deployment floor actually checked rather than merely
+targeted.
 
 The "Verified, and not" section of the [README](../README.md) is kept in
 step with all of this; if you change what a platform job proves, change that

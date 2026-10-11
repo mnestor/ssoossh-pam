@@ -287,7 +287,7 @@ the host's Docker daemon:
 
 ```console
 $ make ci-list                  # what act sees
-$ make ci-local                 # the whole push event
+$ make ci-local                 # linux, then fuzz: every job act can run
 $ make ci-local JOB=linux       # one job
 $ act push -j linux --matrix name:el8   # one matrix entry
 ```
@@ -301,8 +301,8 @@ is closed — the helper exits 255. `docker` shrugs that off; act does not.
 `make ci-local` detects a helper that will not answer and runs act with an
 empty docker config instead, so this only bites a bare `act` invocation.
 
-Because every job in `ci.yml` runs inside its own `container:`, what act
-executes is close to what GitHub will — the runner image is only a host for
+Because the Linux and fuzz jobs in `ci.yml` each run inside their own
+`container:`, what act executes for them is close to what GitHub will — the runner image is only a host for
 the job container. That makes a local run worth trusting for everything except
 runner-specific behaviour (secrets, OIDC, the hosted tool cache).
 
@@ -317,11 +317,11 @@ $ act push -W .github/workflows/release.yml -j linux \
       --matrix target:linux-musl_x86_64 --artifact-server-path build/act-artifacts
 ```
 
-FreeBSD and macOS are in `.github/workflows/cross-platform.yml` behind
-`workflow_dispatch`, and act cannot run either: there is no macOS runner to
-emulate, and the FreeBSD VM action needs nested virtualisation. They are
-deliberately not on the push path until the port is finished on Linux.
-
-Neither platform has ever been compiled. [`docs/porting.md`](../docs/porting.md)
-is the same sequence written out for a human with a machine: what to
-install, what to run in what order, and what is most likely to break first.
+The `freebsd` and `macos` jobs in `ci.yml` are the exception, and
+`make ci-local` leaves them out: act cannot run either of them. There is no macOS runner to emulate, and the
+FreeBSD VM action needs nested virtualisation. GitHub runs both on every
+push and pull request; for a branch without a pull request yet,
+`gh workflow run ci.yml --ref <branch>` gets the same answer.
+[`docs/porting.md`](../docs/porting.md) is the same sequence written out for
+a human with a machine: what to install, what to run in what order, and
+what is most likely to break first.

@@ -921,6 +921,16 @@ ends in
 .B ...
 itself.
 .PP
+On macOS,
+.B log stream
+prints each of those backslashes as
+.BR \e134 ,
+so a newline logged as
+.B \ex0a
+reads there as
+.BR \e134x0a .
+It is still one line.
+.PP
 Text that reaches the terminal is filtered first: the approval URL is
 reduced to the RFC 3986 character set, the console code to its base32
 alphabet, and the QR code to the three block characters it is drawn from.
