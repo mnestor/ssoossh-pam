@@ -337,17 +337,19 @@ the unit suites, the stdio and size gates, and the end-to-end suite. macOS
 builds on a hosted macOS 26 runner for a deployment floor of 15 and runs
 those same gates plus `make check-apple-spi`, which puts the Ed25519 SecKey
 SPI through its known-answer self-test against the running system rather
-than only checking that the SDK still exports it;
-[`cross-platform.yml`](.github/workflows/cross-platform.yml) runs the gates
-again on macos-15, which is where the floor itself is checked. `v1.0.0`
-shipped signed artifacts for both — the macOS installer notarized — and
-macOS has additionally been tested by hand on Apple silicon.
+than only checking that the SDK still exports it. `v1.0.0` shipped signed
+artifacts for both — the macOS installer notarized — and macOS has
+additionally been tested by hand on Apple silicon.
 
-Linux is the only one of the three that CI runs on **every** commit; the
-other two are gated at release time and on demand. A change to
-`src/crypto_darwin.c` is therefore unverified until a macOS job has had it,
-because the Makefile compiles exactly one crypto backend and a green Linux
-build says nothing about the other.
+**And on every commit:** [`ci.yml`](.github/workflows/ci.yml) runs the same
+gates on FreeBSD 14 and 15 and on macOS 15 and 26 for every push and pull
+request, alongside Linux — macos-26 being the release's own runner and
+macos-15 the deployment floor, where the module is actually loaded on the
+oldest release it claims. A change cannot reach a tag without having passed
+on every platform the tag ships. That matters most for
+`src/crypto_darwin.c`, which no Linux build compiles, but it is not only
+code: `v1.4.0`'s release stopped on macOS because the e2e harness read the
+unified log wrongly, which no Linux job could have shown.
 
 **Not verified:** a run against a production `ssoosshd`, and console mode
 against the real server endpoints, which exist in the monorepo but have only

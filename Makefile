@@ -443,12 +443,17 @@ lint:
 compile_commands.json:
 	bear -- $(MAKE) --always-make all
 
-# Run the CI workflow locally with nektos/act, before pushing. Every job in
-# ci.yml runs in its own container, so what act reproduces is close to what
-# GitHub will do -- close enough that a workflow bug shows up here first.
+# Run the CI workflow locally with nektos/act, before pushing. ci.yml's
+# Linux and fuzz jobs each run in their own container, so what act
+# reproduces of them is close to what GitHub will do -- close enough that a
+# workflow bug shows up here first.
 #
-#   make ci-local            the whole push event
+#   make ci-local            every job act can run: linux, then fuzz
 #   make ci-local JOB=linux  one job
+#
+# Not the bare push event: ci.yml's freebsd and macos jobs are beyond act --
+# there is no macOS runner to emulate, and the FreeBSD VM needs nested
+# virtualisation -- so `act push` with no job named fails on them every time.
 #
 # The credential dance below is not incidental. act reads the docker client
 # config for registry auth before it starts a job, and VS Code's dev
@@ -464,6 +469,7 @@ compile_commands.json:
 # store that does answer is left alone, so this stays correct on a normal
 # machine and for a private image.
 ACT_DOCKER_CONFIG := $(BUILD)/act-docker
+ACT_JOBS := linux fuzz
 
 ci-local:
 	@helper=$$(sed -n 's/.*"credsStore"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
@@ -476,7 +482,9 @@ ci-local:
 	  printf '{}\n' > $(ACT_DOCKER_CONFIG)/config.json; \
 	  export DOCKER_CONFIG="$(CURDIR)/$(ACT_DOCKER_CONFIG)"; \
 	fi; \
-	act push $(if $(JOB),-j $(JOB),) $(ACT_ARGS)
+	for job in $(or $(JOB),$(ACT_JOBS)); do \
+	  act push -j "$$job" $(ACT_ARGS) || exit 1; \
+	done
 
 ci-list:
 	@act -l

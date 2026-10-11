@@ -207,7 +207,7 @@ jobs:
           retention-days: 7
 
   # No hosted FreeBSD image exists; a VM on the Linux runner, as in
-  # cross-platform.yml. Slower, but it is the OpenPAM platform that ships.
+  # ci.yml. Slower, but it is the OpenPAM platform that ships.
   #
   # One row per supported major release, because the major *is* the
   # artifact: base OpenSSL changes with it -- 14 has libcrypto.so.30, 15
@@ -264,7 +264,7 @@ jobs:
             # This image boots with kern.hostname empty, so gethostname(3)
             # succeeds and returns nothing, the module sends no "hostname"
             # claim and context_check.py fails the body. Name it, as
-            # cross-platform.yml does.
+            # ci.yml does.
             sudo hostname freebsd-ci
             sudo gmake e2e
             gmake dist DIST_TARGET=freebsd${{ matrix.major }}_x86_64
@@ -297,8 +297,9 @@ jobs:
   # writes -- PBES2, AES-256-CBC, SHA-256 MAC -- so every rotation of those
   # certificates otherwise needs converting by hand on the way into the
   # secret store. What that costs is the module no longer being loaded on
-  # the oldest release it claims: cross-platform.yml still builds and runs
-  # the gates on macos-15, which is where that is checked now.
+  # the oldest release it claims: ci.yml builds and runs the gates on
+  # macos-15 for every push and pull request, which is where that is
+  # checked now.
   #
   # The installer package is built here rather than in the release job,
   # because pkgbuild, productbuild, codesign and notarytool exist only on
@@ -333,7 +334,7 @@ jobs:
       - name: Build
         run: make
 
-      # The same gates cross-platform.yml runs.
+      # The same gates ci.yml runs on every push and pull request.
       - name: Symbol, load and unit gates
         run: make test
 

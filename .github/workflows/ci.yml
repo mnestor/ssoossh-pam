@@ -1,7 +1,19 @@
 name: CI
 
-# Linux only. FreeBSD and macOS live in cross-platform.yml and are manual
-# until the port is finished on Linux -- see that file for why.
+# Every platform a release ships, on every push and pull request: Linux,
+# FreeBSD 14 and 15, and macOS on both the release runner and the deployment
+# floor.
+#
+# FreeBSD and macOS used to wait for the tag. v1.4.0 is why they do not:
+# its new e2e scenarios passed on every Linux row here, then failed on the
+# release's macOS job, because `log stream` hands a backslash back as \134
+# and Linux has nothing that does. The module was right and the harness was
+# not, and nothing short of running the suite on macOS could have said so.
+# A platform that ships is a platform a pull request has to pass.
+#
+# To get the same answer for a branch with no pull request yet:
+#
+#   gh workflow run ci.yml --ref <branch>
 on:
   push:
     branches: [main]
@@ -158,3 +170,169 @@ jobs:
 
       - name: Fuzz every parser
         run: make fuzz-run FUZZ_RUNS=200000
+
+  # No hosted FreeBSD image exists, so it runs in a VM on the Linux runner.
+  # Slower than native, but it is the OpenPAM platform that reaches server
+  # hosts, so it matters more than macOS does.
+  #
+  # Both supported majors, because they are two platforms wearing one name:
+  # base OpenSSL is 3.0 on 14 and 3.5 on 15, so they link different
+  # libcrypto sonames and release.yml ships an artifact for each. A green
+  # 14 says nothing about 15.
+  freebsd:
+    name: freebsd${{ matrix.major }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - major: '14'
+            version: '14.4'
+          - major: '15'
+            version: '15.1'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: cross-platform-actions/action@v1.6.0
+        with:
+          operating_system: freebsd
+          version: ${{ matrix.version }}
+          # One script rather than several steps: each `run` is a fresh VM
+          # session, so state does not carry between them. -e because the
+          # job's result is this script's status, and without it that is
+          # only the status of the last line.
+          run: |
+            set -ex
+
+            # The image's package set is older than the repo, and pkg is
+            # content to install a curl built against a newer libssh2 than
+            # the one already on disk -- libcurl.so.4 then fails to resolve
+            # at dlopen time. Bring the image up to the repo first.
+            sudo pkg upgrade -y
+
+            # libcurl is NOT in FreeBSD base -- base has fetch(1), not curl.
+            # libpam and OpenSSL are. bash and python3 are for the e2e
+            # harness; ssh-keygen is in base.
+            sudo pkg install -y gmake pkgconf curl bash python3
+
+            uname -a
+            cc --version | head -1
+            pkg-config --modversion libcrypto || true
+            pkg-config --modversion libcurl || true
+
+            # OpenPAM, not Linux-PAM. If either header is missing the whole
+            # platform assumption is wrong and everything below is noise.
+            ls -l /usr/include/security/pam_appl.h
+            ls -l /usr/include/security/openpam.h
+
+            gmake
+            gmake test
+            gmake check-stdio
+            gmake check-size
+            gmake san
+
+            # This image boots with kern.hostname empty, so gethostname(3)
+            # succeeds and returns nothing, the module sends no "hostname"
+            # claim and context_check.py, rightly, fails the request body.
+            # Name it.
+            sudo hostname freebsd-ci
+
+            # Last, because it runs as root: anything it leaves in the tree
+            # is root's, and `gmake san` starts with a clean. It rebuilds
+            # the module plain itself, since san left an instrumented one.
+            # syslogd runs by default here and files LOG_AUTHPRIV into
+            # /var/log/auth.log.
+            gmake tests/pamtest
+            sudo gmake e2e
+
+  # Two runners, because the release splits the question in two: it builds
+  # on macOS 26 for a deployment floor of 15. macos-26 is the runner the
+  # release job itself uses, so a green row here is the release's macOS
+  # gates passing before the tag rather than after it; macos-15 is where
+  # the module is actually loaded and run on the oldest release it claims.
+  #
+  # src/crypto_darwin.c is compiled nowhere else -- the Makefile builds
+  # exactly one crypto backend -- so this job is the only check an edit to
+  # it gets. Console mode is not compiled into the macOS build.
+  macos:
+    name: macos (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-26]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: What this SDK actually has
+        run: |
+          sw_vers
+          uname -m
+          cc --version | head -1
+          sdk=$(xcrun --show-sdk-path)
+          echo "SDK: $sdk"
+
+          # libcurl is a system library here, headers and stub included --
+          # if that stops being true, the HTTP half needs another route.
+          if [ -f "$sdk/usr/include/curl/curl.h" ]; then
+            echo "curl headers: present"
+          else
+            echo "curl headers: ABSENT"
+            exit 1
+          fi
+
+          # No OpenSSL, which is why there is a Security.framework backend
+          # at all. If Apple ever ships headers, the decision is worth
+          # revisiting rather than assuming.
+          if [ -d "$sdk/usr/include/openssl" ]; then
+            echo "openssl headers: PRESENT -- the macOS crypto decision needs revisiting"
+          else
+            echo "openssl headers: absent, as expected"
+          fi
+
+          # OpenPAM, and the module directory that SIP protects.
+          ls -l "$sdk/usr/include/security/pam_appl.h"
+          ls -l "$sdk/usr/include/security/openpam.h"
+
+      # The Ed25519 SPI the Darwin backend resolves at runtime, checked in
+      # this SDK's export list before anything is built. A missing symbol
+      # here is the earliest possible warning that a macOS is about to
+      # lose ssh-ed25519 CAs -- see docs/porting.md, and apple-drift.yml
+      # for the same check across every SDK and beta on a schedule.
+      - name: Ed25519 SPI still exported by this SDK
+        run: tests/apple-spi-check.sh --sdk "$(xcrun --show-sdk-path)"
+
+      - name: Build
+        run: make
+
+      - name: Symbol, load and unit gates
+        run: make test
+
+      # The other half of the SPI check: through the framework this macOS
+      # actually runs, via the backend's own self-test and the pinned
+      # acceptance profile in tests/unit/ed25519_test.c.
+      - name: Ed25519 SPI works on this macOS
+        run: make check-apple-spi
+
+      - name: No stdio in the module
+        run: make check-stdio
+
+      - name: Size gate
+        run: make check-size
+
+      - name: Sanitiser build and unit suite
+        run: make san
+
+      # Last, and after san rather than before it as on Linux: this is the
+      # one step that runs as root, so anything it leaves in the tree is
+      # root's, and `make san` starts with a clean. `make e2e` sees the
+      # instrumented module san left and rebuilds it plain.
+      #
+      # /usr/lib/pam is protected by System Integrity Protection, so
+      # tests/e2e.sh loads the bundle by absolute path, and it reads the
+      # log through `log stream`: syslog(3) feeds the unified logging
+      # system on macOS and there is no socket to bind.
+      - name: End to end against a stub server
+        run: |
+          make tests/pamtest
+          sudo make e2e
