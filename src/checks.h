@@ -24,9 +24,15 @@
  *
  * A signature verification, not a string comparison against the CA file's
  * contents. A CA key that this backend cannot use, or an algorithm refused
- * by policy, is reported by name rather than as a bare signature failure. */
+ * by policy, is reported by name rather than as a bare signature failure.
+ *
+ * On success *signer is the trusted key that verified the signature. That
+ * is the key to name as the CA, not the certificate's own signature-key
+ * field: verification never compares the two, so only the trusted key is
+ * known to have signed. */
 bool ssoossh_check_ca_signature(const ssoossh_cert *cert,
-                                const ssoossh_ca_list *cas);
+                                const ssoossh_ca_list *cas,
+                                const ssoossh_ca_key **signer);
 
 /* Check 2: the certificate's public key must be the one generated for this
  * attempt. Without it, checks 1, 3 and 4 passing together would accept any
@@ -48,7 +54,14 @@ bool ssoossh_check_key_binding(const ssoossh_cert *cert, const uint8_t *our_key,
  * not mention and an account listed with nothing are the same thing: they
  * add nothing. Denying an account is the job of the tools that already do
  * it -- the account's own existence, sudoers, pam_access -- not of a file
- * whose absence has to fail open so a bad edit cannot take the host. */
+ * whose absence has to fail open so a bad edit cannot take the host.
+ *
+ * A refusal names the certificate's key ID and serial, because a valid
+ * certificate refused here is the "approved, but not for this account"
+ * case: someone did approve, and the log is where an operator finds out
+ * who. That relies on the order the checks run in -- after 1 and 2, the
+ * key ID is known to come from a trusted CA and from this attempt's
+ * certificate, not from whoever answered the HTTP request. */
 bool ssoossh_check_principal(const ssoossh_cert *cert, const char *username,
                              const char *map_path);
 

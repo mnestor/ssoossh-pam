@@ -191,6 +191,7 @@ int suite_checks(void)
     uint8_t scratch[SSOOSSH_MAX_CERT];
     ssoossh_cert cert;
     ssoossh_ca_list cas;
+    const ssoossh_ca_key *signer = NULL;
 
     if (ssoossh_ca_load("tests/fixtures/cas_one.pub", &cas) != SSOOSSH_CA_OK) {
         t_failf(__FILE__, __LINE__, "could not load the CA fixture");
@@ -199,10 +200,31 @@ int suite_checks(void)
 
     /* Check 1, both ways. */
     if (cert_of("cert_ca_ecdsa384.cert", scratch, sizeof(scratch), &cert)) {
-        T_CHECK(ssoossh_check_ca_signature(&cert, &cas));
+        T_CHECK(ssoossh_check_ca_signature(&cert, &cas, &signer));
+        T_CHECK(signer == &cas.keys[0]);
     }
     if (cert_of("cert_untrusted.cert", scratch, sizeof(scratch), &cert)) {
-        T_CHECK(!ssoossh_check_ca_signature(&cert, &cas));
+        signer = NULL;
+        T_CHECK(!ssoossh_check_ca_signature(&cert, &cas, &signer));
+        T_CHECK(signer == NULL);
+    }
+
+    /* The signer is the key that verified, not the first one tried: the
+     * success line names it as the CA, so with two trusted keys it has to
+     * be the right one of the two. */
+    {
+        ssoossh_ca_list two;
+
+        if (ssoossh_ca_load("tests/fixtures/cas_two.pub", &two) ==
+                SSOOSSH_CA_OK &&
+            cert_of("cert_ca_ecdsa384.cert", scratch, sizeof(scratch), &cert)) {
+            T_EQ_INT(two.count, 2);
+            T_CHECK(ssoossh_check_ca_signature(&cert, &two, &signer));
+            T_CHECK(signer == &two.keys[1]);
+            T_EQ_STR(signer->algo, "ecdsa-sha2-nistp384");
+        } else {
+            t_failf(__FILE__, __LINE__, "could not load the two-CA fixture");
+        }
     }
 
     /* Check 2. The failing case is the one that matters: a certificate
@@ -225,7 +247,7 @@ int suite_checks(void)
             if (cert_of("cert_other_key.cert", scratch, sizeof(scratch),
                         &cert)) {
                 /* Signed by the trusted CA, and for a different key. */
-                T_CHECK(ssoossh_check_ca_signature(&cert, &cas));
+                T_CHECK(ssoossh_check_ca_signature(&cert, &cas, &signer));
                 T_CHECK(!ssoossh_check_key_binding(&cert, user_key, user_len));
             }
         }

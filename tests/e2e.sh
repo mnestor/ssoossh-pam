@@ -279,6 +279,10 @@ next_port() {
 failures=0
 LAST_OUT=""
 pamtest_env=""
+# pamtest_user: the account pamtest authenticates, when a scenario needs
+# one other than games. A single argument rather than a word list, so it
+# can carry a newline.
+pamtest_user=""
 
 # Reads back the module's syslog output, waiting up to two seconds for the
 # line a caller is looking for to land.
@@ -332,7 +336,8 @@ run() {
     # to set, or -u NAME to clear one -- for a scenario that depends on the
     # environment the module sees. Unquoted on purpose: it is a word list.
     # shellcheck disable=SC2086
-    out="$(env $pamtest_env "$repo/tests/pamtest" "$service" 2>&1)" && rc=0 || rc=$?
+    out="$(env $pamtest_env "$repo/tests/pamtest" "$service" \
+        ${pamtest_user:+"$pamtest_user"} 2>&1)" && rc=0 || rc=$?
     stop_stub
     # Kept for a caller that wants to assert on what reached the terminal
     # rather than on what reached syslog.
@@ -436,7 +441,9 @@ if [ ${#scenarios[@]} -eq 0 ]; then
     scenarios=(approved denied expired failed unknown envelope-error no-cert
                enrolled drop error-500 error-404 bad-json create-500 escape
                wrong-key untrusted expired-cert wrong-principal
-               principals-map slow console cross-origin cross-origin-console
+               principals-map principals-map-refused hostile-key-id
+               hostile-user hostile-error slow
+               console cross-origin cross-origin-console
                cancel-requisite
                cancel-bracketed ssh-only-local ssh-only-remote)
 fi
@@ -448,8 +455,12 @@ for s in "${scenarios[@]}"; do
         # the create body, and context_check.py asserts the context fields
         # are there, well-formed, and agree with what this harness knows
         # about the host -- the service name it wrote, the CA it generated.
-        run approved approved 0 'successful authentication' 15s '' \
-            --record "$workdir/create.json"
+        # The success line names the certificate as well as the account:
+        # on a shared account the key ID is the only thing in the host's
+        # log that says who approved.
+        run approved approved 0 \
+            'successful authentication: games, certificate ID "stub" \(serial 1\) CA ecdsa-sha2-nistp384 SHA256:[A-Za-z0-9+/]{43}' \
+            15s '' --record "$workdir/create.json"
         printf '  %-18s ' "context-fields"
         if out="$(python3 "$here/context_check.py" "$workdir/create.json" \
                     "$service" "$workdir/ca_ecdsa384.pub" 2>&1)"; then
@@ -557,8 +568,60 @@ for s in "${scenarios[@]}"; do
         run expired-cert approved 0 'certificate expired' 15s '' \
             --validity=-20m:-10m ;;
     wrong-principal)
-        run wrong-principal approved 0 'do not include' 15s '' \
+        # Refused for the account, and still named: this is the "approved,
+        # but not for this account" case, and the approver is the half of
+        # it an operator needs.
+        run wrong-principal approved 0 \
+            'do not include "games", certificate ID "stub" \(serial 1\)' 15s '' \
             --principals nobody ;;
+    principals-map-refused)
+        # The same, through a map that loads and does not grant it.
+        printf 'games:\n  - ops\n' > "$workdir/principals.yaml"
+        chmod 644 "$workdir/principals.yaml"
+        run principals-map-refused approved 0 \
+            'include neither the account "games" nor any principal .* maps to it, certificate ID "stub" \(serial 1\)' \
+            15s "principals-map=$workdir/principals.yaml" --principals nobody ;;
+    hostile-key-id)
+        # A key ID carrying a newline and the start of a forged line. The
+        # CA signed it, which says who issued it and nothing about whether
+        # it is safe to hand to syslog. Matching the whole key ID, escaped,
+        # on one line is the proof: unescaped, it would be two lines and
+        # this pattern could not match either of them.
+        run hostile-key-id approved 0 \
+            'successful authentication: games, certificate ID "evil\\x0apam_ssoossh: successful authentication: root \\"x\\"" \(serial 1\)' \
+            15s '' --key-id "$(printf 'evil\npam_ssoossh: successful authentication: root "x"')" ;;
+    hostile-error)
+        # The server's error text, through both paths that log it: an HTTP
+        # status, and a terminal event's envelope. JSON decoding turns the
+        # \n back into a newline, so this is the same forgery again.
+        forged="$(printf 'down\npam_ssoossh: successful authentication: root')"
+        run hostile-error create-500 0 \
+            'returned status 500 for the certificate request: down\\x0apam_ssoossh: successful authentication: root' \
+            15s '' --error "$forged"
+        run hostile-envelope envelope-error 0 \
+            'certificate request failed: down\\x0apam_ssoossh: successful authentication: root' \
+            15s '' --error "$forged" ;;
+    hostile-user)
+        # The same forgery through the account name, which is the client's
+        # own text under sshd: it hands PAM the name it was sent, valid
+        # account or not. The certificate does not carry that name, so
+        # check 3 refuses it, and the refusal is matched here; the flow
+        # line, which logs the name before anything has looked at it, is
+        # matched after.
+        pamtest_user="$(printf 'games\npam_ssoossh: successful authentication: root')"
+        run hostile-user approved 0 \
+            'do not include "games\\x0apam_ssoossh: successful authentication: root", certificate ID "stub"' \
+            15s ''
+        pamtest_user=""
+        printf '  %-18s ' "hostile-user-flow"
+        if grep -qE 'flow for games\\x0apam_ssoossh: successful authentication: root \(service=' \
+                "$logfile" 2>/dev/null; then
+            printf 'ok\n'
+        else
+            printf 'FAILED\n'
+            grep -a pam_ssoossh "$logfile" 2>/dev/null | tail -12 >&2 || true
+            failures=$((failures + 1))
+        fi ;;
     principals-map)
         # The map authorizes the account through a principal that is not
         # its name, which is the whole point of having one.

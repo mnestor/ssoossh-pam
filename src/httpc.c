@@ -239,13 +239,20 @@ static bool selinux_enforcing(void)
  *
  * routine is for the events stream, where a dropped connection is
  * expected and the caller reconnects; a local refusal is loud either way,
- * because reconnecting will not fix it. */
+ * because reconnecting will not fix it.
+ *
+ * curl's text is escaped before it is logged. It is mostly curl's own
+ * words, but not only: a hostname mismatch quotes the subject name from
+ * the server's certificate, which is text the server chose. */
 static void log_transport_failure(CURL *h, CURLcode rc, const char *errbuf,
                                   bool routine, const char *what)
 {
-    const char *detail =
-        (errbuf != NULL && errbuf[0] != '\0') ? errbuf : curl_easy_strerror(rc);
+    char detail[SSOOSSH_LOG_TEXT_LEN];
     long oserrno = 0;
+
+    ssoossh_log_escape_str(
+        (errbuf != NULL && errbuf[0] != '\0') ? errbuf : curl_easy_strerror(rc),
+        detail, sizeof(detail));
 
     curl_easy_getinfo(h, CURLINFO_OS_ERRNO, &oserrno);
 

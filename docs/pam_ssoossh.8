@@ -876,6 +876,51 @@ when
 .B debug
 is set.
 .PP
+A successful authentication names the certificate as well as the local
+account, with the fields
+.BR sshd (8)
+logs for a certificate login:
+.PP
+.RS
+.nf
+pam_ssoossh: successful authentication: root, certificate ID "alice@example.com" (serial 42) CA ecdsa\-sha2\-nistp384 SHA256:...
+.fi
+.RE
+.PP
+On a shared account the account name says nothing about who approved; the
+key ID does,
+.B ssoosshd
+having written it from its key ID template.
+It is logged only once all four checks have passed, and the CA named is the
+trusted key that verified the signature, not the certificate's own claim
+about which key signed it.
+A valid certificate refused because its principals do not authorize the
+account \(em approved, but not for this account \(em names its key ID and
+serial on the refusal line too.
+.PP
+The key ID and the principals are chosen by whoever holds the CA key, so
+they are escaped before they reach syslog: a double quote and a backslash
+take a backslash, and every other byte outside printable ASCII, newline
+included, becomes
+.BR \exNN .
+A value longer than 255 bytes once escaped is cut, and the cut is marked
+with
+.B ...
+after the closing quote.
+.PP
+Everything else the module logs but did not write is escaped the same way:
+the account name, which
+.BR sshd (8)
+hands PAM as the client sent it, whether or not the account exists; the
+service, tty and remote host PAM items; and the server's own text \(em
+its error messages, event names and
+.BR expires_at ,
+and libcurl's error text, which can quote the server's certificate.
+These are printed without quotes, so a value that does not fit is cut and
+ends in
+.B ...
+itself.
+.PP
 Text that reaches the terminal is filtered first: the approval URL is
 reduced to the RFC 3986 character set, the console code to its base32
 alphabet, and the QR code to the three block characters it is drawn from.

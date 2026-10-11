@@ -12,6 +12,7 @@
 int suite_duration(void);
 int suite_args(void);
 int suite_sanitize(void);
+int suite_log_escape(void);
 int suite_sshwire(void);
 int suite_der(void);
 int suite_crypto(void);
