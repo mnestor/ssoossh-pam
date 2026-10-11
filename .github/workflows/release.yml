@@ -31,11 +31,14 @@ name: Release
 # for 1.1.1 -- because glibc symbol versions only go forward: a module
 # built on an older glibc loads on a newer one, never the reverse.
 #
-#   git tag v1.2.0 && git push origin v1.2.0     builds and publishes
+#   git tag v1.2.0 && git push origin v1.2.0     builds and publishes, then
+#                                                has ssoossh rebuild the
+#                                                package repository with it
 #   gh workflow run release.yml                  builds only; the merged set
 #                                                is a workflow artifact
 #
-# A tag with a hyphen (v1.2.0-rc1) is published as a pre-release.
+# A tag with a hyphen (v1.2.0-rc1) is published as a pre-release and is not
+# added to the package repository.
 on:
   push:
     tags: ["v*"]
@@ -603,3 +606,58 @@ jobs:
           name: release-dry-run
           path: dist/*
           retention-days: 7
+
+  # Serves the release from the package repository (apt and dnf). Nothing is
+  # uploaded from here: that repository has one writer, ssoossh, whose
+  # ordered upload (packages, then signed metadata) only holds while no
+  # second job writes beside it, and whose index is rebuilt whole from the
+  # releases it fetches. See scripts/fetch-pam-packages.sh in ssoossh. So
+  # this asks ssoossh's repository workflow to rebuild the index with this
+  # tag, the same run a person would otherwise start by hand.
+  #
+  # Its own job, after the release is public: the repository workflow
+  # downloads the packages from the published release, and a failure here
+  # must not touch a release that already exists. A pre-release stops at the
+  # release page, since the repository is what every installed host takes
+  # updates from.
+  publish-repository:
+    name: publish repository
+    needs: [release]
+    if: ${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    env:
+      HAVE_OP: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
+    # The dispatch uses its own token, not this one.
+    permissions: {}
+    steps:
+      # A fine-grained token for mnestor/ssoossh only, with Actions: read and
+      # write and nothing else: it can start that repository's workflows but
+      # cannot change its code or its releases.
+      - name: Dispatch token
+        id: secrets
+        if: ${{ env.HAVE_OP == 'true' }}
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          DISPATCH_TOKEN: op://Github Actions/ssoossh-repository-dispatch/token
+
+      - name: Rebuild the package repository
+        if: ${{ env.HAVE_OP == 'true' }}
+        env:
+          GH_TOKEN: ${{ steps.secrets.outputs.DISPATCH_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh workflow run repository.yaml --repo mnestor/ssoossh --ref main -f pam_tag="$TAG"
+          echo "requested a package repository rebuild for $TAG:" \
+            "https://github.com/mnestor/ssoossh/actions/workflows/repository.yaml"
+
+      # A fork has no token to dispatch with; say what to run instead.
+      - name: No dispatch token
+        if: ${{ env.HAVE_OP != 'true' }}
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          echo "::warning::no OP_SERVICE_ACCOUNT_TOKEN, so the package repository was not" \
+            "rebuilt. Run ssoossh's repository workflow with pam_tag=$TAG."
