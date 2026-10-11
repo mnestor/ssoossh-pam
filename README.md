@@ -289,6 +289,10 @@ the account name, which `sshd` hands PAM as the client sent it; the other PAM
 items (service, tty, rhost); and the server's own text — its error messages,
 event names and `expires_at`, and libcurl's error text.
 
+On macOS, `log stream` prints each of those backslashes as `\134`, so a
+newline the module logged as `\x0a` reads there as `\134x0a`. It is
+still one line.
+
 ## Third-party code
 
 Two libraries are vendored, pinned by hash, and compiled in — neither adds
