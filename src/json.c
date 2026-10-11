@@ -422,6 +422,7 @@ bool ssoossh_parse_rfc3339(const char *s, int64_t *out_unix)
         }
     } else if (s[i] == '+' || s[i] == '-') {
         int oh, om;
+        int64_t off;
 
         if (!digits(s + i + 1, 2, &oh) || s[i + 3] != ':' ||
             !digits(s + i + 4, 2, &om) || s[i + 6] != '\0') {
@@ -430,7 +431,10 @@ bool ssoossh_parse_rfc3339(const char *s, int64_t *out_unix)
         if (oh > 23 || om > 59) {
             return false;
         }
-        t += (s[i] == '+' ? -1 : 1) * (oh * 3600 + om * 60);
+        /* Done in int64_t so the range check above is not the only thing
+         * keeping it from overflowing int. */
+        off = (int64_t)oh * 3600 + (int64_t)om * 60;
+        t += s[i] == '+' ? -off : off;
     } else {
         return false;
     }
