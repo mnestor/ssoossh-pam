@@ -2,6 +2,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 #include <syslog.h>
 
 #include "crypto.h"
@@ -64,6 +65,56 @@ void ssoossh_debugf(const char *fmt, ...)
     va_start(ap, fmt);
     vlogf(LOG_DEBUG, fmt, ap);
     va_end(ap);
+}
+
+bool ssoossh_log_escape(const uint8_t *p, size_t len, char *out, size_t out_cap)
+{
+    static const char hex[] = "0123456789abcdef";
+    size_t w = 0;
+
+    if (out_cap == 0) {
+        return len == 0;
+    }
+    for (size_t i = 0; i < len; i++) {
+        uint8_t c = p[i];
+        char esc[4];
+        size_t n;
+
+        if (c == '"' || c == '\\') {
+            esc[0] = '\\';
+            esc[1] = (char)c;
+            n = 2;
+        } else if (c >= 0x20 && c < 0x7f) {
+            esc[0] = (char)c;
+            n = 1;
+        } else {
+            esc[0] = '\\';
+            esc[1] = 'x';
+            esc[2] = hex[c >> 4];
+            esc[3] = hex[c & 0x0f];
+            n = 4;
+        }
+        /* Whole escapes or nothing: a cut \x0 would read as a different
+         * byte to anyone decoding the line. */
+        if (w + n >= out_cap) {
+            out[w] = '\0';
+            return false;
+        }
+        memcpy(out + w, esc, n);
+        w += n;
+    }
+    out[w] = '\0';
+    return true;
+}
+
+void ssoossh_log_escape_str(const char *s, char *out, size_t out_cap)
+{
+    /* Three bytes held back for the marker. A cut leaves at most
+     * out_cap - 4 bytes written, so the marker and the NUL always fit
+     * after it. */
+    if (!ssoossh_log_escape((const uint8_t *)s, strlen(s), out, out_cap - 3)) {
+        (void)strcat(out, "...");
+    }
 }
 
 void ssoossh_log_version(void)

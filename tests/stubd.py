@@ -80,7 +80,7 @@ def sign(public_key_text, ca="ca_ecdsa384", principals="games,ops",
         with open(key_path, "w", encoding="utf-8") as f:
             f.write(public_key_text)
         subprocess.run(
-            ["ssh-keygen", "-q", "-s", ca_path, "-I", "stub", "-n",
+            ["ssh-keygen", "-q", "-s", ca_path, "-I", ARGS.key_id, "-n",
              principals, "-V", validity, "-z", "1", key_path],
             check=True,
         )
@@ -117,7 +117,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.respond_raw(200, b"not json at all")
             return
         if ARGS.scenario == "create-500":
-            self.respond(500, {"data": None, "error": "signing backend down"})
+            self.respond(500, {"data": None,
+                               "error": ARGS.error or "signing backend down"})
             return
 
         request_id = str(uuid.uuid4())
@@ -228,7 +229,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if scenario == "envelope-error":
             self.write_event("failed",
-                             {"data": {}, "error": "the signer refused"})
+                             {"data": {},
+                              "error": ARGS.error or "the signer refused"})
             return
 
         if scenario == "no-cert":
@@ -297,6 +299,13 @@ def main():
     # to fail overrides this.
     p.add_argument("--principals", default="games,ops")
     p.add_argument("--validity", default="-5m:+5m")
+    # The certificate's key ID, which the module logs as the approver. A
+    # scenario overrides it to put hostile bytes there.
+    p.add_argument("--key-id", default="stub")
+    # The error text create-500 and envelope-error send, for a scenario
+    # that puts hostile bytes there. JSON carries a newline as \n, which
+    # the module decodes back into one.
+    p.add_argument("--error", default=None)
     p.add_argument("--workdir", required=True,
                    help="directory holding the CA private keys to sign with")
     p.add_argument("--verbose", action="store_true")

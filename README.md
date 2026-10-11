@@ -270,6 +270,25 @@ mutates process-global state and `closelog` closes a descriptor the host may
 be holding. Messages carry their own `pam_ssoossh:` prefix instead, so syslog
 attributing the line to `sudo` costs nothing.
 
+A successful authentication names the certificate as well as the account,
+with the fields `sshd` logs for a certificate login:
+
+```text
+pam_ssoossh: successful authentication: root, certificate ID "alice@example.com" (serial 42) CA ecdsa-sha2-nistp384 SHA256:...
+```
+
+On a shared account the account name says nothing about who approved; the key
+ID does, under the server's `key_id_template`. It is logged only once all four
+checks have passed, and the CA is the trusted key that verified the signature.
+A valid certificate refused because its principals do not authorize the
+account names its key ID and serial on the refusal line too. Text the
+certificate carries is escaped first — `"` and `\` take a backslash, any other
+byte outside printable ASCII becomes `\xNN` — so a key ID cannot write a second
+line into `auth.log`. So is everything else the module logs but did not write:
+the account name, which `sshd` hands PAM as the client sent it; the other PAM
+items (service, tty, rhost); and the server's own text — its error messages,
+event names and `expires_at`, and libcurl's error text.
+
 ## Third-party code
 
 Two libraries are vendored, pinned by hash, and compiled in — neither adds
@@ -288,7 +307,7 @@ ships.
 What has been run, and what has not, stated plainly.
 
 **Verified on Linux (glibc and musl, and the RHEL 8 floor):** the build, the
-symbol and load gates, 18 unit suites, the same suites under ASan and UBSan,
+symbol and load gates, 19 unit suites, the same suites under ASan and UBSan,
 five libFuzzer targets over every parser that reads network bytes, and 25
 end-to-end scenarios through a real PAM stack against a stub `ssoosshd` —
 including the approval, a denial, an expiry, a mid-stream drop and reconnect,

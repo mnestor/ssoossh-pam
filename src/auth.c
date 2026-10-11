@@ -132,7 +132,13 @@ static bool on_event(const char *name, const char *data, size_t data_len,
     wait_ctx *w = ctx;
 
     if (!is_terminal(name)) {
-        ssoossh_debugf("events: informational event %s", name);
+        /* The server names its own events, so the name is escaped. One
+         * that is terminal needs no escaping: it is one of the five above,
+         * and only those are ever copied into the status. */
+        char shown[SSOOSSH_LOG_FIELD_LEN];
+
+        ssoossh_log_escape_str(name, shown, sizeof(shown));
+        ssoossh_debugf("events: informational event %s", shown);
         return true;
     }
     if (data_len >= sizeof(w->a->response)) {
@@ -294,10 +300,15 @@ static int http_to_pam(ssoossh_http_result r, long status,
          * outcome that is PAM_AUTH_ERR. The Go module agrees. */
         ssoossh_errf("timed out waiting for approval");
         return PAM_AUTH_ERR;
-    case SSOOSSH_HTTP_STATUS:
+    case SSOOSSH_HTTP_STATUS: {
+        /* The server's error text, decoded from JSON, so escaped. */
+        char shown[SSOOSSH_LOG_TEXT_LEN];
+
+        ssoossh_log_escape_str(server_error, shown, sizeof(shown));
         ssoossh_errf("ssoosshd returned status %ld for the %s%s%s", status,
-                     what, server_error[0] != '\0' ? ": " : "", server_error);
+                     what, shown[0] != '\0' ? ": " : "", shown);
         return PAM_AUTHINFO_UNAVAIL;
+    }
     case SSOOSSH_HTTP_TOO_LARGE:
         ssoossh_errf("the %s response was larger than this module will read",
                      what);
@@ -489,6 +500,7 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
                          const ssoossh_config *cfg)
 {
     attempt *a = NULL;
+    const ssoossh_ca_key *signer = NULL;
     ssoossh_keypair *kp = NULL;
     ssoossh_cancel cancel;
     ssoossh_request_context ctx;
@@ -497,7 +509,7 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
     size_t point_len = 0, resp_len = 0;
     int64_t start_ms, deadline_ms;
     long status = 0;
-    char skew[32], timeout[32];
+    char skew[32], timeout[32], who[SSOOSSH_LOG_FIELD_LEN];
     bool console = false;
     bool armed = false;
     int rc = PAM_AUTH_ERR;
@@ -516,6 +528,11 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
             "not configured correctly in pam.d: trusted-ca-file is required");
         return PAM_NO_MODULE_DATA;
     }
+
+    /* user goes to the server and to check 3 as it is; who is the copy for
+     * log lines, escaped because nothing has vetted the name yet -- see
+     * ssoossh_log_escape_str. */
+    ssoossh_log_escape_str(user, who, sizeof(who));
 
     a = calloc(1, sizeof(*a));
     if (a == NULL) {
@@ -572,7 +589,7 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
     if (cfg->ssh_only && !ssoossh_ssh_session()) {
         ssoossh_infof("ssh-only is set and this session did not arrive over "
                       "SSH; standing aside for %s",
-                      user);
+                      who);
         rc = PAM_IGNORE;
         goto done;
     }
@@ -596,11 +613,23 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
                   ssoossh_context_is_console(&ctx);
         break;
     }
-    ssoossh_infof("%s flow for %s (service=%s tty=%s rhost=%s)",
-                  console ? "console" : "browser", user,
-                  ctx.service[0] != '\0' ? ctx.service : "-",
-                  ctx.tty[0] != '\0' ? ctx.tty : "-",
-                  ctx.rhost[0] != '\0' ? ctx.rhost : "-");
+    {
+        /* PAM items the application set -- rhost being, under sshd with
+         * UseDNS, a name from somebody's reverse DNS -- so escaped like the
+         * account name. */
+        char service[SSOOSSH_LOG_FIELD_LEN], tty[SSOOSSH_LOG_FIELD_LEN],
+            rhost[SSOOSSH_LOG_FIELD_LEN];
+
+        ssoossh_log_escape_str(ctx.service[0] != '\0' ? ctx.service : "-",
+                               service, sizeof(service));
+        ssoossh_log_escape_str(ctx.tty[0] != '\0' ? ctx.tty : "-", tty,
+                               sizeof(tty));
+        ssoossh_log_escape_str(ctx.rhost[0] != '\0' ? ctx.rhost : "-", rhost,
+                               sizeof(rhost));
+        ssoossh_infof("%s flow for %s (service=%s tty=%s rhost=%s)",
+                      console ? "console" : "browser", who, service, tty,
+                      rhost);
+    }
 
     if (!ssoossh_crypto_keygen(&kp) ||
         !ssoossh_crypto_public_point(kp, point, sizeof(point), &point_len) ||
@@ -615,8 +644,7 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
     {
         char fp[SSOOSSH_FINGERPRINT_LEN];
         ssoossh_sshkey_fingerprint(a->key_blob, a->key_blob_len, fp);
-        ssoossh_debugf("generated ephemeral P-384 keypair for %s: %s", user,
-                       fp);
+        ssoossh_debugf("generated ephemeral P-384 keypair for %s: %s", who, fp);
     }
 
     if (!build_body(a, user, a->key_line, &ctx, cfg)) {
@@ -682,6 +710,11 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
     if (ssoossh_json_data_string(a->response, resp_len, "expires_at",
                                  a->expires_at, sizeof(a->expires_at))) {
         int64_t expires_unix;
+        char shown[SSOOSSH_LOG_FIELD_LEN];
+
+        /* For the log lines: the failure branch prints a value nothing has
+         * parsed. */
+        ssoossh_log_escape_str(a->expires_at, shown, sizeof(shown));
 
         if (ssoossh_parse_rfc3339(a->expires_at, &expires_unix)) {
             int64_t remaining = (expires_unix - (int64_t)time(NULL)) * 1000;
@@ -690,13 +723,13 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
             if (server_deadline < deadline_ms) {
                 ssoossh_debugf("bounding the wait by the server's expires_at "
                                "(%s), %lld ms earlier than timeout",
-                               a->expires_at,
+                               shown,
                                (long long)(deadline_ms - server_deadline));
                 deadline_ms = server_deadline;
             }
         } else {
             ssoossh_warnf("could not parse expires_at %s; using timeout alone",
-                          a->expires_at);
+                          shown);
         }
     }
 
@@ -759,8 +792,12 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
          * decision and deserves PAM_AUTH_ERR -- but parity is the bar until
          * both modules change together, and falling through to pam_unix is
          * the safer of the two answers anyway. */
-        ssoossh_errf("certificate request %s: %s", wait.status,
-                     a->server_error);
+        /* wait.status is one of the terminal names; the error text is the
+         * server's own. */
+        char shown[SSOOSSH_LOG_TEXT_LEN];
+
+        ssoossh_log_escape_str(a->server_error, shown, sizeof(shown));
+        ssoossh_errf("certificate request %s: %s", wait.status, shown);
         rc = PAM_AUTHINFO_UNAVAIL;
         goto done;
     }
@@ -811,18 +848,25 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
 
     {
         char key_fp[SSOOSSH_FINGERPRINT_LEN], ca_fp[SSOOSSH_FINGERPRINT_LEN];
+        char algo[SSOOSSH_LOG_FIELD_LEN];
+
+        /* Nothing has checked the signature yet, so the algorithm name is
+         * whatever the certificate says. */
+        ssoossh_log_escape_str(a->cert.signature_algo, algo, sizeof(algo));
         ssoossh_sshkey_fingerprint(a->cert.key_blob, a->cert.key_blob_len,
                                    key_fp);
         ssoossh_sshkey_fingerprint(a->cert.signature_key.p,
                                    a->cert.signature_key.len, ca_fp);
         ssoossh_debugf("issued certificate for %s: serial %llu, %zu "
                        "principal(s), key %s, signature key %s (%s)",
-                       user, (unsigned long long)a->cert.serial,
-                       a->cert.principal_count, key_fp, ca_fp,
-                       a->cert.signature_algo);
+                       who, (unsigned long long)a->cert.serial,
+                       a->cert.principal_count, key_fp, ca_fp, algo);
     }
 
-    if (!ssoossh_check_ca_signature(&a->cert, &a->cas) ||
+    /* The order is load-bearing for the log as well as the answer: check
+     * 3's refusal names the key ID, which is only worth printing once
+     * checks 1 and 2 have said who signed it and for which key. */
+    if (!ssoossh_check_ca_signature(&a->cert, &a->cas, &signer) ||
         !ssoossh_check_key_binding(&a->cert, a->key_blob, a->key_blob_len) ||
         !ssoossh_check_principal(&a->cert, user, cfg->principals_map) ||
         !ssoossh_check_validity(&a->cert, (int64_t)time(NULL),
@@ -831,6 +875,23 @@ int ssoossh_authenticate(pam_handle_t *pamh, const char *user,
         goto done;
     }
 
+    /* Here rather than in pam_sm_authenticate, because the certificate is
+     * wiped before this function returns. user is the local account, which
+     * on a shared one (root, deploy) says nothing about who approved; the
+     * key ID does, under the server's key_id_template. The fields are the
+     * ones sshd logs for a certificate login, in the same order, and the CA
+     * is the trusted key that verified the signature. */
+    {
+        char id[SSOOSSH_LOG_FIELD_LEN], ca_fp[SSOOSSH_FINGERPRINT_LEN];
+        bool whole = ssoossh_log_escape(a->cert.key_id.p, a->cert.key_id.len,
+                                        id, sizeof(id));
+
+        ssoossh_sshkey_fingerprint(signer->blob, signer->len, ca_fp);
+        ssoossh_infof("successful authentication: %s, certificate ID \"%s\"%s "
+                      "(serial %llu) CA %s %s",
+                      who, id, whole ? "" : "...",
+                      (unsigned long long)a->cert.serial, signer->algo, ca_fp);
+    }
     rc = PAM_SUCCESS;
 
 done:

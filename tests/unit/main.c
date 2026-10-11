@@ -33,6 +33,7 @@ static const struct {
     {"duration", suite_duration},
     {"args", suite_args},
     {"sanitize", suite_sanitize},
+    {"log-escape", suite_log_escape},
     {"sshwire", suite_sshwire},
     {"der", suite_der},
     {"crypto", suite_crypto},

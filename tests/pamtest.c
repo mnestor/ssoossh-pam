@@ -25,6 +25,9 @@
 int main(int argc, char **argv)
 {
     const char *service = (argc > 1) ? argv[1] : "ssoossh-test";
+    /* The account to authenticate. games unless a scenario needs a name
+     * of its own -- one carrying bytes that must not reach syslog raw. */
+    const char *user = (argc > 2) ? argv[2] : "games";
     pam_handle_t *p = NULL;
     struct pam_conv conv = {SSOOSSH_CONV, NULL};
     sigset_t block;
@@ -45,7 +48,7 @@ int main(int argc, char **argv)
     sigaddset(&block, SIGINT);
     (void)sigprocmask(SIG_BLOCK, &block, NULL);
 
-    int r = pam_start(service, "games", &conv, &p);
+    int r = pam_start(service, user, &conv, &p);
     if (r != PAM_SUCCESS) {
         fprintf(stderr, "start %d\n", r);
         return 1;

@@ -31,23 +31,31 @@ static void principals_string(const ssoossh_cert *cert, char *out,
 
     out[0] = '\0';
     for (size_t i = 0; i < cert->principal_count; i++) {
-        size_t need = cert->principals[i].len + (w > 0 ? 1 : 0);
+        /* Escaped, because the CA chose these bytes and they are going to
+         * syslog -- see ssoossh_log_escape. One that does not fit even on
+         * its own ends the list, as running out of room does. */
+        char one[SSOOSSH_LOG_FIELD_LEN];
+        bool whole = ssoossh_log_escape(
+            cert->principals[i].p, cert->principals[i].len, one, sizeof(one));
+        size_t len = strlen(one);
+        size_t need = len + (w > 0 ? 1 : 0);
 
-        if (w + need + 4 >= out_cap) {
+        if (!whole || w + need + 4 >= out_cap) {
             (void)memcpy(out + w, "...", 4);
             return;
         }
         if (w > 0) {
             out[w++] = ',';
         }
-        memcpy(out + w, cert->principals[i].p, cert->principals[i].len);
-        w += cert->principals[i].len;
+        memcpy(out + w, one, len);
+        w += len;
     }
     out[w] = '\0';
 }
 
 bool ssoossh_check_ca_signature(const ssoossh_cert *cert,
-                                const ssoossh_ca_list *cas)
+                                const ssoossh_ca_list *cas,
+                                const ssoossh_ca_key **signer)
 {
     char cert_fp[SSOOSSH_FINGERPRINT_LEN];
     bool saw_unsupported = false;
@@ -64,6 +72,7 @@ bool ssoossh_check_ca_signature(const ssoossh_cert *cert,
             ssoossh_debugf("check 1/4 CA signature: signed by %s, trusted CA "
                            "%zu of %zu",
                            ca_fp, i + 1, cas->count);
+            *signer = &cas->keys[i];
             return true;
         case SSOOSSH_VERIFY_UNSUPPORTED:
             saw_unsupported = true;
@@ -78,6 +87,11 @@ bool ssoossh_check_ca_signature(const ssoossh_cert *cert,
                                cert_fp);
 
     if (saw_unsupported) {
+        char algo[SSOOSSH_LOG_FIELD_LEN];
+
+        /* Escaped: no CA vouched for it, and an algorithm this module has
+         * never heard of is exactly the case that lands here. */
+        ssoossh_log_escape_str(cert->signature_algo, algo, sizeof(algo));
         /* Naming the algorithm is the whole point. "not signed by a trusted
          * CA" would send an operator looking at their CA file when the
          * problem is that this build cannot verify that algorithm -- or,
@@ -91,7 +105,7 @@ bool ssoossh_check_ca_signature(const ssoossh_cert *cert,
                      "means RSA with SHA-1 and is refused by policy; any "
                      "other algorithm here is one this host's crypto does "
                      "not provide",
-                     cert->signature_algo, cert_fp, ssoossh_crypto_version());
+                     algo, cert_fp, ssoossh_crypto_version());
         return false;
     }
 
@@ -130,10 +144,14 @@ bool ssoossh_check_key_binding(const ssoossh_cert *cert, const uint8_t *our_key,
 bool ssoossh_check_principal(const ssoossh_cert *cert, const char *username,
                              const char *map_path)
 {
-    char listed[512];
+    char listed[512], who[SSOOSSH_LOG_FIELD_LEN];
     bool mapped = false;
 
     principals_string(cert, listed, sizeof(listed));
+    /* For the log lines only. The comparisons below use username as PAM
+     * gave it: an escaped name would match a principal the account does
+     * not have. */
+    ssoossh_log_escape_str(username, who, sizeof(who));
 
     /* The account's own name is always enough. The map only ever adds
      * principals to an account -- it is not a way to lock one out -- so an
@@ -145,7 +163,7 @@ bool ssoossh_check_principal(const ssoossh_cert *cert, const char *username,
     if (ssoossh_cert_has_principal(cert, username)) {
         ssoossh_debugf("check 3/4 principal: certificate principals [%s] "
                        "include account \"%s\" (exact match)",
-                       listed, username);
+                       listed, who);
         return true;
     }
 
@@ -178,7 +196,7 @@ bool ssoossh_check_principal(const ssoossh_cert *cert, const char *username,
                 ssoossh_debugf("check 3/4 principal: account \"%s\" authorized "
                                "via principals-map %s (certificate principals "
                                "[%s])",
-                               username, map_path, listed);
+                               who, map_path, listed);
                 return true;
             }
             mapped = true;
@@ -191,13 +209,23 @@ bool ssoossh_check_principal(const ssoossh_cert *cert, const char *username,
         }
     }
 
-    if (mapped) {
-        ssoossh_errf("certificate principals [%s] include neither the account "
-                     "\"%s\" nor any principal %s maps to it",
-                     listed, username, map_path);
-    } else {
-        ssoossh_errf("certificate principals [%s] do not include \"%s\"",
-                     listed, username);
+    {
+        char id[SSOOSSH_LOG_FIELD_LEN];
+        bool whole = ssoossh_log_escape(cert->key_id.p, cert->key_id.len, id,
+                                        sizeof(id));
+
+        if (mapped) {
+            ssoossh_errf("certificate principals [%s] include neither the "
+                         "account \"%s\" nor any principal %s maps to it, "
+                         "certificate ID \"%s\"%s (serial %llu)",
+                         listed, who, map_path, id, whole ? "" : "...",
+                         (unsigned long long)cert->serial);
+        } else {
+            ssoossh_errf("certificate principals [%s] do not include \"%s\", "
+                         "certificate ID \"%s\"%s (serial %llu)",
+                         listed, who, id, whole ? "" : "...",
+                         (unsigned long long)cert->serial);
+        }
     }
     return false;
 }

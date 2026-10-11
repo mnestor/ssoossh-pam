@@ -84,11 +84,9 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc,
         return PAM_USER_UNKNOWN;
     }
 
-    rc = ssoossh_authenticate(pamh, user, &cfg);
-    if (rc == PAM_SUCCESS) {
-        ssoossh_infof("successful authentication: %s", user);
-    }
-    return rc;
+    /* The success line is auth.c's to log: it names the certificate, which
+     * no longer exists by the time this returns. */
+    return ssoossh_authenticate(pamh, user, &cfg);
 }
 
 /* The module establishes no credentials of its own: the certificate it
