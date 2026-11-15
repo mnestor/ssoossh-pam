@@ -69,7 +69,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # actionlint, for .github/workflows/ci.yml. Not packaged in Debian; taken from
 # the release tarball so it needs no Go toolchain at image-build time.
-ARG ACTIONLINT_VERSION=1.7.7
+ARG ACTIONLINT_VERSION=1.7.12
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
@@ -86,7 +86,7 @@ RUN set -eux; \
 # nektos/act, for running .github/workflows locally before pushing. It drives
 # the host's Docker daemon (mounted into this container), so the workflow runs
 # in the same images CI uses rather than an approximation of them.
-ARG ACT_VERSION=0.2.89
+ARG ACT_VERSION=0.2.97
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
