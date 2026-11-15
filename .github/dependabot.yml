@@ -15,6 +15,10 @@
 #   * The ACTIONLINT_VERSION / ACT_VERSION build args in that Dockerfile.
 #     They are release-tarball downloads, not a manifest Dependabot reads;
 #     they have to be bumped by hand.
+#
+# Those build args and the vendored sources under third_party/ are watched by
+# .github/workflows/upstream-watch.yml instead, which opens an issue when
+# upstream moves.
 version: 2
 
 updates:

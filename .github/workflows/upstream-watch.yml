@@ -1,0 +1,57 @@
+name: Upstream watch
+
+# Opens an issue when something this repository pins by hand has moved
+# upstream: the vendored sources under third_party/ and the tool versions
+# pinned as Dockerfile build args. Nothing else watches them -- there is no
+# manifest here for Dependabot to read -- and it also checks that the
+# vendored files still match the hashes their READMEs record.
+#
+# .github/scripts/upstream-watch.sh holds the checks and says what each one
+# means; .github/upstream-watch.conf lists what is watched.
+#
+# Daily, because the point is not to learn about an upstream fix late. A run
+# with nothing new files nothing: each finding is one issue, matched by
+# title, and a closed issue is not filed again.
+on:
+  schedule:
+    - cron: "20 6 * * *" # 06:20 UTC daily
+  workflow_dispatch:
+  # So a change to the watcher or to what it watches is exercised before it
+  # merges. On a pull request it only prints; it never files.
+  pull_request:
+    paths:
+      - .github/scripts/upstream-watch.sh
+      - .github/upstream-watch.conf
+      - .github/workflows/upstream-watch.yml
+      - third_party/**
+
+permissions:
+  contents: read
+
+# A manual run next to the scheduled one could both find no issue and file
+# two.
+concurrency:
+  group: upstream-watch-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: check pinned upstreams
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # gh issue list, gh issue create.
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Compare the pins with upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FLAG: ${{ github.event_name != 'pull_request' && '--file-issues' || '' }}
+        # FLAG is one word or empty; the expansion passes no argument at all
+        # when it is empty.
+        run: .github/scripts/upstream-watch.sh ${FLAG:+"$FLAG"}
